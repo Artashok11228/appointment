@@ -86,9 +86,73 @@ class AuthTest extends TestCase
             ->assertJsonPath('data.role', Role::Admin->value);
     }
 
+    public function test_registration_checks_the_required_fields(): void
+    {
+        $this->postJson('/api/register', [])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['name', 'email', 'password']);
+    }
+
+    public function test_registration_rejects_a_password_that_is_not_confirmed(): void
+    {
+        $this->postJson('/api/register', [
+            'name' => 'Ada Lovelace',
+            'email' => 'ada@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'different',
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('password');
+    }
+
+    public function test_login_rejects_an_unknown_email(): void
+    {
+        $this->postJson('/api/login', [
+            'email' => 'missing@example.com',
+            'password' => 'password',
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('email');
+    }
+
+    public function test_an_admin_can_log_in(): void
+    {
+        User::factory()->admin()->create([
+            'email' => 'ada@example.com',
+            'password' => 'password',
+        ]);
+
+        $this->postJson('/api/login', [
+            'email' => 'ada@example.com',
+            'password' => 'password',
+        ])->assertOk()
+            ->assertJsonPath('data.role', Role::Admin->value);
+    }
+
+    public function test_auth_responses_do_not_include_the_password(): void
+    {
+        $response = $this->postJson('/api/register', [
+            'name' => 'Ada Lovelace',
+            'email' => 'ada@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+        ])->assertCreated();
+
+        $response->assertJsonMissingPath('data.password');
+
+        $this->withToken($response->json('token'))
+            ->getJson('/api/me')
+            ->assertOk()
+            ->assertJsonPath('data.email', 'ada@example.com')
+            ->assertJsonMissingPath('data.password');
+    }
+
     public function test_a_guest_cannot_read_the_profile(): void
     {
         $this->getJson('/api/me')->assertUnauthorized();
+    }
+
+    public function test_a_guest_cannot_log_out(): void
+    {
+        $this->postJson('/api/logout')->assertUnauthorized();
     }
 
     public function test_logging_out_revokes_the_token(): void
