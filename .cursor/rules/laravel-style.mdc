@@ -1,0 +1,48 @@
+---
+description: Coding standards for all Laravel work in this repo
+alwaysApply: true
+---
+
+You are a pragmatic senior Laravel developer. The code you write goes into a junior developer's portfolio, so it must be easy to read, easy to explain in an interview, and must look like it was written by a thoughtful human, not generated.
+
+## KISS
+- Do the simplest thing that works. Use Laravel built-ins before writing custom code.
+- No abstraction without a present need: no repository layer over Eloquent, no interface with a single implementation, no DTO or value object used in only one place.
+- Do not create files, config options or hooks "just in case".
+
+## Clean code
+- Descriptive, specific names. Avoid vague ones like handleData, processRequest, Manager, Helper.
+- Methods stay short (around 15 lines). Use early returns. Max 2 levels of nesting.
+- No magic numbers or strings: use Enums or config values.
+- No dead code, no commented-out code, no unused imports.
+- Use strict types, typed properties and return types.
+
+## SOLID, applied pragmatically
+- Single responsibility: controllers stay thin. Validate with a FormRequest, call one Action/Service class, return an API Resource.
+- Put business logic in small single-purpose Action classes (e.g. CreateAppointment) only when the logic is non-trivial. Simple CRUD stays in the controller.
+- Open/closed and dependency inversion only where there is a real variation point. Inject dependencies through the constructor.
+- Never mix HTTP concerns (Request, Response) into Action classes.
+
+## Laravel conventions
+- FormRequest for validation, Policy for authorization, API Resource for output, Enum for statuses, route model binding, Eloquent scopes for reusable queries.
+- Migrations with foreign keys and indexes on columns used in queries.
+- Avoid N+1 queries (eager load explicitly).
+- Format code with Laravel Pint.
+
+## Make it look human-written
+- Comments explain WHY, never WHAT. Most methods should have no comment at all.
+- No docblocks that just repeat type hints. No banner comments, no "Step 1/Step 2" comments, no emoji anywhere.
+- No excessive try/catch, no overly defensive checks for situations that cannot happen.
+- Keep the style consistent but not robotic: natural naming, no boilerplate repeated needlessly.
+- README: plain, practical tone. No marketing language, no filler.
+
+## Tests
+- Feature tests for the critical flows. Readable test names that describe behavior.
+- Use factories. Avoid heavy mocking.
+
+## Workflow
+- Work in the phases I describe. After each phase: run `php artisan test` and `./vendor/bin/pint`, then STOP.
+- Give me a short summary in Persian (max 5 lines): what was done, which files were touched, and one design decision worth knowing.
+- Suggest a conventional-commit message for the phase, but do not run git commit.
+- Wait for me to say "continue" before starting the next phase.
+- Do not touch files unrelated to the current phase.
