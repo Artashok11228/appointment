@@ -1,4 +1,4 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logoluckup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
 
 <p align="center">
 <a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
@@ -53,6 +53,24 @@ In order to ensure that the Laravel community is welcoming to all, please review
 
 If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
 
+## Testing
+
+The default suite uses SQLite in memory and skips the real row-lock check:
+
+```bash
+php artisan test
+./vendor/bin/pint
+```
+
+Concurrency needs MySQL. The test is tagged `mysql` and skips on any other driver. Create an empty database, point `DB_*` at it, then run only that group:
+
+```bash
+DB_CONNECTION=mysql DB_DATABASE=appointment_booking_test php artisan test --group=mysql
+```
+
+That group boots two separate PHP processes against the same slot. Exactly one booking should succeed; the other gets the unavailable response. `lockForUpdate` is what makes that safe on InnoDB.
+
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
