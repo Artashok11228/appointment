@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Policies;
 
-use App\Enums\Role;
 use App\Models\Service;
 use App\Models\User;
 
@@ -22,16 +21,16 @@ class ServicePolicy
 
     public function create(User $user): bool
     {
-        return $user->role === Role::Admin;
+        return $user->isAdmin();
     }
 
     public function update(User $user, Service $service): bool
     {
-        return $user->role === Role::Admin;
+        return $user->isAdmin();
     }
 
     public function delete(User $user, Service $service): bool
     {
-        return $user->role === Role::Admin;
+        return $user->isAdmin();
     }
 }

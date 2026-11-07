@@ -23,24 +23,37 @@ class ListAvailableSlots
             return [];
         }
 
-        $first = $candidates[0]['starts_at'];
-        $last = $candidates[array_key_last($candidates)]['ends_at'];
+        $gridStart = $candidates[0]['starts_at'];
+        $gridEnd = $candidates[array_key_last($candidates)]['ends_at'];
         $booked = Appointment::query()
-            ->overlapping($service->id, $first, $last)
+            ->overlapping($service->id, $gridStart, $gridEnd)
             ->get(['starts_at', 'ends_at']);
 
         return array_values(array_filter(
             $candidates,
-            fn (array $slot): bool => ! $this->hits($booked, $slot['starts_at'], $slot['ends_at']),
+            fn (array $slot): bool => ! $this->overlapsAny($booked, $slot['starts_at'], $slot['ends_at']),
         ));
     }
 
-    public function aligns(Service $service, CarbonInterface $startsAt): bool
+    /**
+     * Meant to run inside a transaction that already holds the service row lock.
+     */
+    public function isFree(Service $service, CarbonInterface $startsAt, CarbonInterface $endsAt, ?Appointment $ignoring = null): bool
     {
-        $start = Carbon::instance($startsAt);
+        if (! $this->isOnGrid($service, $startsAt)) {
+            return false;
+        }
 
-        foreach ($this->candidates($service, $start) as $slot) {
-            if ($slot['starts_at']->equalTo($start)) {
+        return ! Appointment::query()
+            ->overlapping($service->id, $startsAt, $endsAt, $ignoring?->id)
+            ->lockForUpdate()
+            ->exists();
+    }
+
+    private function isOnGrid(Service $service, CarbonInterface $startsAt): bool
+    {
+        foreach ($this->candidates($service, $startsAt) as $slot) {
+            if ($slot['starts_at']->equalTo($startsAt)) {
                 return true;
             }
         }
@@ -59,18 +72,15 @@ class ListAvailableSlots
             return [];
         }
 
-        $opens = $day->copy()->setTimeFromTimeString((string) config('booking.opens_at'));
         $closes = $day->copy()->setTimeFromTimeString((string) config('booking.closes_at'));
-        $cursor = $opens->copy();
+        $cursor = $day->copy()->setTimeFromTimeString((string) config('booking.opens_at'));
         $slots = [];
 
         while ($cursor->copy()->addMinutes($service->duration_minutes)->lessThanOrEqualTo($closes)) {
-            $ends = $cursor->copy()->addMinutes($service->duration_minutes);
-
-            if ($cursor->greaterThan(now())) {
+            if ($cursor->isFuture()) {
                 $slots[] = [
                     'starts_at' => $cursor->copy(),
-                    'ends_at' => $ends,
+                    'ends_at' => $cursor->copy()->addMinutes($service->duration_minutes),
                 ];
             }
 
@@ -83,7 +93,7 @@ class ListAvailableSlots
     /**
      * @param  Collection<int, Appointment>  $booked
      */
-    private function hits(Collection $booked, CarbonInterface $startsAt, CarbonInterface $endsAt): bool
+    private function overlapsAny(Collection $booked, CarbonInterface $startsAt, CarbonInterface $endsAt): bool
     {
         return $booked->contains(
             fn (Appointment $appointment): bool => $startsAt->lt($appointment->ends_at) && $endsAt->gt($appointment->starts_at),

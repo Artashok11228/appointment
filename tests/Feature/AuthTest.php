@@ -180,4 +180,42 @@ class AuthTest extends TestCase
             ->getJson('/api/me')
             ->assertUnauthorized();
     }
+
+    public function test_login_is_throttled_after_five_failed_attempts(): void
+    {
+        User::factory()->create(['email' => 'ada@example.com']);
+        $credentials = ['email' => 'ada@example.com', 'password' => 'wrong'];
+
+        foreach (range(1, 5) as $attempt) {
+            $this->postJson('/api/login', $credentials)->assertUnprocessable();
+        }
+
+        $this->postJson('/api/login', $credentials)->assertTooManyRequests();
+    }
+
+    public function test_the_login_limit_is_per_email_so_other_users_are_not_locked_out(): void
+    {
+        User::factory()->create(['email' => 'grace@example.com']);
+
+        foreach (range(1, 5) as $attempt) {
+            $this->postJson('/api/login', ['email' => 'ada@example.com', 'password' => 'wrong']);
+        }
+
+        $this->postJson('/api/login', [
+            'email' => 'grace@example.com',
+            'password' => 'password',
+        ])->assertOk();
+    }
+
+    public function test_an_expired_token_is_rejected(): void
+    {
+        $user = User::factory()->create();
+        $token = $user->createToken('api')->plainTextToken;
+
+        $this->travel((int) config('sanctum.expiration') + 1)->minutes();
+
+        $this->withToken($token)
+            ->getJson('/api/me')
+            ->assertUnauthorized();
+    }
 }

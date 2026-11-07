@@ -21,7 +21,8 @@ class StoreAppointmentRequest extends FormRequest
     {
         return [
             'service_id' => ['required', 'integer', 'exists:services,id'],
-            'starts_at' => ['required', 'date'],
+            // No timezone offset allowed: business hours are defined in the app timezone.
+            'starts_at' => ['required', 'date_format:Y-m-d H:i:s,Y-m-d H:i'],
         ];
     }
 }

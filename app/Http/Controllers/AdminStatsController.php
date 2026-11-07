@@ -5,16 +5,15 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Actions\BuildAdminStats;
-use App\Enums\Role;
-use App\Http\Resources\AdminStatsResource;
-use Illuminate\Http\Request;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Gate;
 
 class AdminStatsController extends Controller
 {
-    public function __invoke(Request $request, BuildAdminStats $stats): AdminStatsResource
+    public function __invoke(BuildAdminStats $stats): JsonResponse
     {
-        abort_unless($request->user()->role === Role::Admin, 403);
+        Gate::authorize('view-admin-stats');
 
-        return AdminStatsResource::make($stats->handle());
+        return response()->json(['data' => $stats->handle()]);
     }
 }

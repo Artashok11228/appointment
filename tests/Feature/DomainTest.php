@@ -81,16 +81,22 @@ class DomainTest extends TestCase
         $this->assertTrue($appointment->service->is($service));
     }
 
-    public function test_deleting_a_user_or_service_deletes_their_appointments(): void
+    public function test_deleting_a_user_with_appointments_is_restricted(): void
     {
-        $userAppointment = Appointment::factory()->create();
-        $serviceAppointment = Appointment::factory()->create();
+        $appointment = Appointment::factory()->create();
 
-        $userAppointment->user->delete();
-        $serviceAppointment->service->delete();
+        $this->expectException(QueryException::class);
 
-        $this->assertModelMissing($userAppointment);
-        $this->assertModelMissing($serviceAppointment);
+        $appointment->user->delete();
+    }
+
+    public function test_deleting_a_service_with_appointments_is_restricted(): void
+    {
+        $appointment = Appointment::factory()->create();
+
+        $this->expectException(QueryException::class);
+
+        $appointment->service->delete();
     }
 
     public function test_an_appointment_cannot_point_at_a_missing_user(): void
@@ -118,7 +124,7 @@ class DomainTest extends TestCase
         $this->assertFalse($index['unique']);
     }
 
-    public function test_appointment_foreign_keys_cascade_on_delete(): void
+    public function test_appointment_foreign_keys_restrict_on_delete(): void
     {
         $foreignKeys = collect(Schema::getForeignKeys('appointments'));
 
@@ -128,7 +134,28 @@ class DomainTest extends TestCase
             );
 
             $this->assertNotNull($foreignKey);
-            $this->assertSame('cascade', strtolower((string) $foreignKey['on_delete']));
+            $this->assertSame('restrict', strtolower((string) $foreignKey['on_delete']));
         }
+    }
+
+    public function test_service_names_are_unique_at_the_database_level(): void
+    {
+        Service::factory()->create(['name' => 'Haircut']);
+
+        $this->expectException(QueryException::class);
+
+        Service::factory()->create(['name' => 'Haircut']);
+    }
+
+    public function test_role_cannot_be_mass_assigned(): void
+    {
+        $user = User::query()->create([
+            'name' => 'Ada Lovelace',
+            'email' => 'ada@example.com',
+            'password' => 'password',
+            'role' => Role::Admin->value,
+        ]);
+
+        $this->assertSame(Role::Customer, $user->refresh()->role);
     }
 }

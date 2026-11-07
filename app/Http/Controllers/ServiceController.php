@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\BookingConflict;
 use App\Http\Requests\StoreServiceRequest;
 use App\Http\Requests\UpdateServiceRequest;
 use App\Http\Resources\ServiceResource;
@@ -11,7 +12,6 @@ use App\Models\Service;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
-use Illuminate\Validation\ValidationException;
 
 class ServiceController extends Controller
 {
@@ -51,10 +51,8 @@ class ServiceController extends Controller
     {
         $this->authorize('delete', $service);
 
-        if ($service->appointments()->futureConfirmed()->exists()) {
-            throw ValidationException::withMessages([
-                'service' => ['This service has upcoming confirmed appointments.'],
-            ]);
+        if ($service->appointments()->exists()) {
+            throw new BookingConflict('This service still has appointment history and cannot be deleted.');
         }
 
         $service->delete();

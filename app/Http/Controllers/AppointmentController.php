@@ -12,7 +12,6 @@ use App\Http\Requests\RescheduleAppointmentRequest;
 use App\Http\Requests\StoreAppointmentRequest;
 use App\Http\Resources\AppointmentResource;
 use App\Models\Appointment;
-use App\Models\Service;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Carbon;
@@ -43,7 +42,7 @@ class AppointmentController extends Controller
     {
         $appointment = $create->handle(
             $request->user(),
-            Service::query()->findOrFail($request->validated('service_id')),
+            (int) $request->validated('service_id'),
             Carbon::parse($request->validated('starts_at')),
         );
 
@@ -52,25 +51,20 @@ class AppointmentController extends Controller
             ->setStatusCode(201);
     }
 
-    public function update(
+    public function reschedule(
         RescheduleAppointmentRequest $request,
         Appointment $appointment,
         RescheduleAppointment $reschedule,
     ): AppointmentResource {
-        $updated = $reschedule->handle(
-            $appointment,
-            Carbon::parse($request->validated('starts_at')),
-        );
+        $rescheduled = $reschedule->handle($appointment, Carbon::parse($request->validated('starts_at')));
 
-        return AppointmentResource::make($updated->load(['service', 'user']));
+        return AppointmentResource::make($rescheduled->load(['service', 'user']));
     }
 
     public function cancel(Appointment $appointment, CancelAppointment $cancel): AppointmentResource
     {
         $this->authorize('cancel', $appointment);
 
-        return AppointmentResource::make(
-            $cancel->handle($appointment)->load(['service', 'user']),
-        );
+        return AppointmentResource::make($cancel->handle($appointment)->load(['service', 'user']));
     }
 }

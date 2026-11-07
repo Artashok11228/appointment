@@ -19,14 +19,11 @@ class SendAppointmentReminders extends Command
 
     public function handle(): int
     {
-        $count = 0;
+        $due = $this->due()->get();
 
-        $this->due()->each(function (Appointment $appointment) use (&$count): void {
-            $this->remind($appointment);
-            $count++;
-        });
+        $due->each(fn (Appointment $appointment) => $this->remind($appointment));
 
-        $this->info("Queued {$count} reminder(s).");
+        $this->info("Queued {$due->count()} reminder(s).");
 
         return self::SUCCESS;
     }
@@ -45,6 +42,7 @@ class SendAppointmentReminders extends Command
 
     private function remind(Appointment $appointment): void
     {
+        // If queueing the mail fails, reminded_at rolls back and the next run retries.
         DB::transaction(function () use ($appointment): void {
             $appointment->update(['reminded_at' => now()]);
 

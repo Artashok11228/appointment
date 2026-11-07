@@ -8,7 +8,7 @@ use App\Http\Controllers\ServiceController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/register', [AuthController::class, 'register']);
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
@@ -20,7 +20,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/appointments', [AppointmentController::class, 'index']);
     Route::post('/appointments', [AppointmentController::class, 'store']);
     Route::get('/appointments/{appointment}', [AppointmentController::class, 'show']);
-    Route::patch('/appointments/{appointment}', [AppointmentController::class, 'update']);
+    Route::patch('/appointments/{appointment}', [AppointmentController::class, 'reschedule']);
     Route::post('/appointments/{appointment}/cancel', [AppointmentController::class, 'cancel']);
 
     Route::get('/admin/stats', AdminStatsController::class);

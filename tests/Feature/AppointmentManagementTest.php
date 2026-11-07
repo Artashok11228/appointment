@@ -104,8 +104,51 @@ class AppointmentManagementTest extends TestCase
 
         $this->actingAs($customer, 'sanctum')
             ->postJson("/api/appointments/{$appointment->id}/cancel")
+            ->assertConflict()
+            ->assertJsonPath('message', 'Only a confirmed appointment can be cancelled.');
+    }
+
+    public function test_a_customer_can_open_their_own_appointment_with_its_service_and_user(): void
+    {
+        $customer = User::factory()->customer()->create();
+        $appointment = Appointment::factory()->for($customer)->create();
+
+        $this->actingAs($customer, 'sanctum')
+            ->getJson("/api/appointments/{$appointment->id}")
+            ->assertOk()
+            ->assertJsonPath('data.id', $appointment->id)
+            ->assertJsonPath('data.service.id', $appointment->service_id)
+            ->assertJsonPath('data.user.id', $customer->id);
+    }
+
+    public function test_a_cancelled_appointment_cannot_be_rescheduled(): void
+    {
+        $customer = User::factory()->customer()->create();
+        $appointment = Appointment::factory()->for($customer)->cancelled()->create();
+
+        $this->actingAs($customer, 'sanctum')
+            ->patchJson("/api/appointments/{$appointment->id}", [
+                'starts_at' => '2026-11-02 09:00:00',
+            ])
+            ->assertConflict()
+            ->assertJsonPath('message', 'Only a confirmed appointment can be rescheduled.');
+    }
+
+    public function test_rescheduling_onto_a_slot_outside_the_grid_is_rejected(): void
+    {
+        $customer = User::factory()->customer()->create();
+        $service = Service::factory()->create(['duration_minutes' => 60]);
+        $appointment = Appointment::factory()->for($customer)->for($service)->create([
+            'starts_at' => '2026-11-02 09:00:00',
+            'ends_at' => '2026-11-02 10:00:00',
+        ]);
+
+        $this->actingAs($customer, 'sanctum')
+            ->patchJson("/api/appointments/{$appointment->id}", [
+                'starts_at' => '2026-11-02 10:30:00',
+            ])
             ->assertUnprocessable()
-            ->assertJsonValidationErrors('status');
+            ->assertJsonValidationErrors('starts_at');
     }
 
     public function test_a_customer_can_reschedule_onto_a_free_slot(): void
@@ -125,6 +168,26 @@ class AppointmentManagementTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.starts_at', '2026-11-02T11:00:00+00:00')
             ->assertJsonPath('data.ends_at', '2026-11-02T12:00:00+00:00');
+    }
+
+    public function test_rescheduling_clears_reminded_at_so_a_new_reminder_can_be_sent(): void
+    {
+        $customer = User::factory()->customer()->create();
+        $service = Service::factory()->create(['duration_minutes' => 60]);
+        $appointment = Appointment::factory()->for($customer)->for($service)->create([
+            'starts_at' => '2026-11-02 09:00:00',
+            'ends_at' => '2026-11-02 10:00:00',
+            'status' => AppointmentStatus::Confirmed,
+            'reminded_at' => now(),
+        ]);
+
+        $this->actingAs($customer, 'sanctum')
+            ->patchJson("/api/appointments/{$appointment->id}", [
+                'starts_at' => '2026-11-02 11:00:00',
+            ])
+            ->assertOk();
+
+        $this->assertNull($appointment->refresh()->reminded_at);
     }
 
     public function test_a_customer_cannot_reschedule_someone_elses_appointment(): void

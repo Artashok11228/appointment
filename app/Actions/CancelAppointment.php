@@ -5,26 +5,26 @@ declare(strict_types=1);
 namespace App\Actions;
 
 use App\Enums\AppointmentStatus;
+use App\Exceptions\BookingConflict;
 use App\Models\Appointment;
 use App\Notifications\AppointmentCancelled;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\DB;
 
 class CancelAppointment
 {
     public function handle(Appointment $appointment): Appointment
     {
-        if ($appointment->status !== AppointmentStatus::Confirmed) {
-            throw ValidationException::withMessages([
-                'status' => ['Only a confirmed appointment can be cancelled.'],
-            ]);
-        }
+        return DB::transaction(function () use ($appointment): Appointment {
+            $locked = Appointment::query()->whereKey($appointment->id)->lockForUpdate()->firstOrFail();
 
-        $appointment->update([
-            'status' => AppointmentStatus::Cancelled,
-        ]);
+            if ($locked->status !== AppointmentStatus::Confirmed) {
+                throw new BookingConflict('Only a confirmed appointment can be cancelled.');
+            }
 
-        $appointment->user->notify(new AppointmentCancelled($appointment->load('service')));
+            $locked->update(['status' => AppointmentStatus::Cancelled]);
+            $locked->user->notify(new AppointmentCancelled($locked->load('service')));
 
-        return $appointment;
+            return $locked;
+        });
     }
 }

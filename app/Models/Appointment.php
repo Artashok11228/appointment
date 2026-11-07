@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\AppointmentStatus;
-use App\Enums\Role;
 use Carbon\CarbonInterface;
 use Database\Factories\AppointmentFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -44,10 +43,6 @@ class Appointment extends Model
         return $this->belongsTo(Service::class);
     }
 
-    /**
-     * @param  Builder<Appointment>  $query
-     * @return Builder<Appointment>
-     */
     public function scopeOverlapping(
         Builder $query,
         int $serviceId,
@@ -63,19 +58,18 @@ class Appointment extends Model
             ->when($exceptId !== null, fn (Builder $query): Builder => $query->whereKeyNot($exceptId));
     }
 
-    /**
-     * @param  Builder<Appointment>  $query
-     * @return Builder<Appointment>
-     */
     public function scopeVisibleTo(Builder $query, User $user): Builder
     {
-        if ($user->role === Role::Admin) {
+        if ($user->isAdmin()) {
             return $query;
         }
 
         return $query->whereBelongsTo($user);
     }
 
+    /**
+     * @param  array{status?: string, service_id?: int|string, from?: string, to?: string}  $filters
+     */
     public function scopeFiltered(Builder $query, array $filters): Builder
     {
         return $query

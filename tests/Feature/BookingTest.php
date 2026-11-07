@@ -144,4 +144,52 @@ class BookingTest extends TestCase
             'starts_at' => '2026-11-02 09:00:00',
         ])->assertUnauthorized();
     }
+
+    public function test_a_slot_that_has_already_started_cannot_be_booked(): void
+    {
+        Carbon::setTestNow('2026-11-02 09:30:00');
+        $customer = User::factory()->customer()->create();
+        $service = Service::factory()->create(['duration_minutes' => 60]);
+
+        $this->actingAs($customer, 'sanctum')
+            ->postJson('/api/appointments', [
+                'service_id' => $service->id,
+                'starts_at' => '2026-11-02 09:00:00',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('starts_at');
+
+        $this->assertDatabaseCount('appointments', 0);
+    }
+
+    public function test_a_start_time_with_a_timezone_offset_is_rejected(): void
+    {
+        $customer = User::factory()->customer()->create();
+        $service = Service::factory()->create(['duration_minutes' => 60]);
+
+        // 09:00+05:00 is 04:00 in the app timezone, which is outside opening hours.
+        $this->actingAs($customer, 'sanctum')
+            ->postJson('/api/appointments', [
+                'service_id' => $service->id,
+                'starts_at' => '2026-11-02T09:00:00+05:00',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('starts_at');
+
+        $this->assertDatabaseCount('appointments', 0);
+    }
+
+    public function test_a_start_time_without_seconds_is_accepted(): void
+    {
+        $customer = User::factory()->customer()->create();
+        $service = Service::factory()->create(['duration_minutes' => 60]);
+
+        $this->actingAs($customer, 'sanctum')
+            ->postJson('/api/appointments', [
+                'service_id' => $service->id,
+                'starts_at' => '2026-11-02 09:00',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.starts_at', '2026-11-02T09:00:00+00:00');
+    }
 }

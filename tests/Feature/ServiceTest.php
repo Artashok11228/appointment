@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Enums\AppointmentStatus;
 use App\Models\Appointment;
 use App\Models\Service;
 use App\Models\User;
@@ -140,49 +139,35 @@ class ServiceTest extends TestCase
             ->assertJsonPath('data.duration_minutes', 40);
     }
 
-    public function test_a_service_with_a_future_confirmed_appointment_cannot_be_deleted(): void
+    public function test_a_service_with_appointment_history_cannot_be_deleted(): void
     {
-        Carbon::setTestNow('2026-11-02 08:00:00');
+        Carbon::setTestNow('2026-11-02 12:00:00');
         $admin = User::factory()->admin()->create();
         $service = Service::factory()->create();
-        $appointment = Appointment::factory()->for($service)->create([
+        $appointment = Appointment::factory()->for($service)->cancelled()->create([
             'starts_at' => '2026-11-02 09:00:00',
             'ends_at' => '2026-11-02 10:00:00',
-            'status' => AppointmentStatus::Confirmed,
         ]);
 
         $this->actingAs($admin, 'sanctum')
             ->deleteJson("/api/services/{$service->id}")
-            ->assertUnprocessable()
-            ->assertJsonValidationErrors('service')
-            ->assertJsonPath('errors.service.0', 'This service has upcoming confirmed appointments.');
+            ->assertConflict()
+            ->assertJsonPath('message', 'This service still has appointment history and cannot be deleted.');
 
         $this->assertModelExists($service);
         $this->assertModelExists($appointment);
     }
 
-    public function test_a_service_can_be_deleted_when_appointments_are_past_or_not_confirmed(): void
+    public function test_a_service_without_appointments_can_be_deleted(): void
     {
-        Carbon::setTestNow('2026-11-02 12:00:00');
         $admin = User::factory()->admin()->create();
         $service = Service::factory()->create();
-        $past = Appointment::factory()->for($service)->create([
-            'starts_at' => '2026-11-02 09:00:00',
-            'ends_at' => '2026-11-02 10:00:00',
-            'status' => AppointmentStatus::Confirmed,
-        ]);
-        $cancelled = Appointment::factory()->for($service)->cancelled()->create([
-            'starts_at' => '2026-11-03 09:00:00',
-            'ends_at' => '2026-11-03 10:00:00',
-        ]);
 
         $this->actingAs($admin, 'sanctum')
             ->deleteJson("/api/services/{$service->id}")
             ->assertNoContent();
 
         $this->assertModelMissing($service);
-        $this->assertModelMissing($past);
-        $this->assertModelMissing($cancelled);
     }
 
     public function test_a_missing_service_returns_not_found(): void

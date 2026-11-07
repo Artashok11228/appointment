@@ -6,13 +6,12 @@ namespace App\Actions;
 
 use App\Enums\AppointmentStatus;
 use App\Exceptions\AppointmentUnavailable;
+use App\Exceptions\BookingConflict;
 use App\Models\Appointment;
 use App\Models\Service;
 use App\Notifications\AppointmentRescheduled;
 use Carbon\CarbonInterface;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
 
 class RescheduleAppointment
 {
@@ -21,34 +20,27 @@ class RescheduleAppointment
     public function handle(Appointment $appointment, CarbonInterface $startsAt): Appointment
     {
         return DB::transaction(function () use ($appointment, $startsAt): Appointment {
-            $locked = Service::query()->whereKey($appointment->service_id)->lockForUpdate()->firstOrFail();
-            $appointment = Appointment::query()->whereKey($appointment->id)->lockForUpdate()->firstOrFail();
+            $service = Service::query()->whereKey($appointment->service_id)->lockForUpdate()->firstOrFail();
+            $locked = Appointment::query()->whereKey($appointment->id)->lockForUpdate()->firstOrFail();
 
-            if ($appointment->status !== AppointmentStatus::Confirmed) {
-                throw ValidationException::withMessages([
-                    'status' => ['Only a confirmed appointment can be rescheduled.'],
-                ]);
+            if ($locked->status !== AppointmentStatus::Confirmed) {
+                throw new BookingConflict('Only a confirmed appointment can be rescheduled.');
             }
 
-            $start = Carbon::instance($startsAt);
-            $ends = $start->copy()->addMinutes($locked->duration_minutes);
-            $taken = Appointment::query()
-                ->overlapping($locked->id, $start, $ends, $appointment->id)
-                ->lockForUpdate()
-                ->exists();
+            $endsAt = $startsAt->copy()->addMinutes($service->duration_minutes);
 
-            if (! $this->slots->aligns($locked, $start) || $taken) {
+            if (! $this->slots->isFree($service, $startsAt, $endsAt, ignoring: $locked)) {
                 throw new AppointmentUnavailable;
             }
 
-            $appointment->update([
-                'starts_at' => $start,
-                'ends_at' => $ends,
+            $locked->update([
+                'starts_at' => $startsAt,
+                'ends_at' => $endsAt,
+                'reminded_at' => null,
             ]);
+            $locked->user->notify(new AppointmentRescheduled($locked->load('service')));
 
-            $appointment->user->notify(new AppointmentRescheduled($appointment->load('service')));
-
-            return $appointment;
+            return $locked;
         });
     }
 }

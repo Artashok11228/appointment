@@ -50,7 +50,8 @@ return [
     |
     */
 
-    'expiration' => null,
+    // Seven days. A leaked token should not work forever.
+    'expiration' => 60 * 24 * 7,
 
     /*
     |--------------------------------------------------------------------------

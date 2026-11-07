@@ -15,15 +15,15 @@ class AvailabilityController extends Controller
     public function __invoke(
         AvailabilityRequest $request,
         Service $service,
-        ListAvailableSlots $slots,
+        ListAvailableSlots $availability,
     ): JsonResponse {
         $day = Carbon::createFromFormat('Y-m-d', $request->validated('date'))->startOfDay();
 
-        $data = array_map(fn (array $slot): array => [
+        $freeSlots = array_map(fn (array $slot): array => [
             'starts_at' => $slot['starts_at']->toIso8601String(),
             'ends_at' => $slot['ends_at']->toIso8601String(),
-        ], $slots->on($service, $day));
+        ], $availability->on($service, $day));
 
-        return response()->json(['data' => $data]);
+        return response()->json(['data' => $freeSlots]);
     }
 }

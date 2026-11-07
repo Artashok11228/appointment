@@ -91,29 +91,29 @@ class BuildAdminStats
             ->orderByDesc('total')
             ->limit((int) config('booking.top_services'))
             ->get()
-            ->map(fn ($row): array => [
-                'service_id' => (int) $row->service_id,
-                'name' => (string) $row->name,
-                'total' => (int) $row->total,
+            ->map(fn (object $service): array => [
+                'service_id' => (int) $service->service_id,
+                'name' => (string) $service->name,
+                'total' => (int) $service->total,
             ])
             ->all();
     }
 
     private function cancellationRate(): float
     {
-        $row = Appointment::query()
+        $totals = Appointment::query()
             ->selectRaw(
                 'count(*) as total, sum(case when status = ? then 1 else 0 end) as cancelled',
                 [AppointmentStatus::Cancelled->value],
             )
             ->first();
 
-        $total = (int) ($row->total ?? 0);
+        $total = (int) ($totals->total ?? 0);
 
         if ($total === 0) {
             return 0.0;
         }
 
-        return round(((int) $row->cancelled) / $total, 4);
+        return round(((int) $totals->cancelled) / $total, 4);
     }
 }

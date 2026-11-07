@@ -11,30 +11,28 @@ use App\Models\Service;
 use App\Models\User;
 use App\Notifications\AppointmentBooked;
 use Carbon\CarbonInterface;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class CreateAppointment
 {
     public function __construct(private ListAvailableSlots $slots) {}
 
-    public function handle(User $customer, Service $service, CarbonInterface $startsAt): Appointment
+    public function handle(User $customer, int $serviceId, CarbonInterface $startsAt): Appointment
     {
-        return DB::transaction(function () use ($customer, $service, $startsAt): Appointment {
+        return DB::transaction(function () use ($customer, $serviceId, $startsAt): Appointment {
             // Two bookings for one service have to share this row before either overlap check finishes.
-            $locked = Service::query()->whereKey($service->id)->lockForUpdate()->firstOrFail();
-            $start = Carbon::instance($startsAt);
-            $ends = $start->copy()->addMinutes($locked->duration_minutes);
+            $service = Service::query()->whereKey($serviceId)->lockForUpdate()->firstOrFail();
+            $endsAt = $startsAt->copy()->addMinutes($service->duration_minutes);
 
-            if (! $this->slots->aligns($locked, $start) || $this->conflicts($locked, $start, $ends)) {
+            if (! $this->slots->isFree($service, $startsAt, $endsAt)) {
                 throw new AppointmentUnavailable;
             }
 
             $appointment = Appointment::query()->create([
                 'user_id' => $customer->id,
-                'service_id' => $locked->id,
-                'starts_at' => $start,
-                'ends_at' => $ends,
+                'service_id' => $service->id,
+                'starts_at' => $startsAt,
+                'ends_at' => $endsAt,
                 'status' => AppointmentStatus::Confirmed,
             ]);
 
@@ -42,13 +40,5 @@ class CreateAppointment
 
             return $appointment;
         });
-    }
-
-    private function conflicts(Service $service, CarbonInterface $startsAt, CarbonInterface $endsAt): bool
-    {
-        return Appointment::query()
-            ->overlapping($service->id, $startsAt, $endsAt)
-            ->lockForUpdate()
-            ->exists();
     }
 }

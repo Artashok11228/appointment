@@ -24,6 +24,11 @@ class ConcurrentBookingTest extends TestCase
             $this->markTestSkipped('Requires MySQL for real row locks.');
         }
 
+        // migrate:fresh wipes the database, so refuse anything that does not look like a test database.
+        if (! str_ends_with((string) config('database.connections.mysql.database'), '_test')) {
+            $this->markTestSkipped('DB_DATABASE must end in _test to run the concurrency test.');
+        }
+
         // RefreshDatabase wraps one transaction, so two processes must use a real migrated database.
         Artisan::call('migrate:fresh');
 
@@ -111,7 +116,6 @@ declare(strict_types=1);
 
 use App\Actions\CreateAppointment;
 use App\Exceptions\AppointmentUnavailable;
-use App\Models\Service;
 use App\Models\User;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Carbon;
@@ -131,7 +135,7 @@ config([
 try {
     $app->make(CreateAppointment::class)->handle(
         User::query()->findOrFail((int) $argv[1]),
-        Service::query()->findOrFail((int) $argv[2]),
+        (int) $argv[2],
         Carbon::parse($argv[3]),
     );
 
