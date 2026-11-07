@@ -97,4 +97,15 @@ class Appointment extends Model
             ->where('status', AppointmentStatus::Confirmed)
             ->where('starts_at', '>', now());
     }
+
+    public function isLockedForCustomerModification(): bool
+    {
+        $minutes = (int) config('booking.modification_lock_minutes');
+
+        if ($minutes <= 0) {
+            return false;
+        }
+
+        return now()->greaterThanOrEqualTo($this->starts_at->copy()->subMinutes($minutes));
+    }
 }

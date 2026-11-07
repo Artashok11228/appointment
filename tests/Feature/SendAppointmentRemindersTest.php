@@ -46,7 +46,7 @@ class SendAppointmentRemindersTest extends TestCase
             $appointment->user,
             AppointmentReminder::class,
             fn (AppointmentReminder $notification): bool => $notification instanceof ShouldQueue
-                && $notification instanceof ShouldQueueAfterCommit,
+                && ! $notification instanceof ShouldQueueAfterCommit,
         );
         $this->assertNotNull($appointment->refresh()->reminded_at);
     }

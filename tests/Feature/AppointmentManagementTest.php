@@ -24,7 +24,8 @@ class AppointmentManagementTest extends TestCase
             'booking.open_weekdays' => [1, 2, 3, 4, 5],
         ]);
 
-        Carbon::setTestNow('2026-11-02 08:00:00');
+        // Far enough before 09:00 slots that the default 2-hour modification lock does not apply.
+        Carbon::setTestNow('2026-11-02 06:00:00');
     }
 
     protected function tearDown(): void

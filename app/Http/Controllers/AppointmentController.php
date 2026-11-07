@@ -13,6 +13,7 @@ use App\Http\Requests\StoreAppointmentRequest;
 use App\Http\Resources\AppointmentResource;
 use App\Models\Appointment;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Carbon;
 
@@ -56,15 +57,21 @@ class AppointmentController extends Controller
         Appointment $appointment,
         RescheduleAppointment $reschedule,
     ): AppointmentResource {
-        $rescheduled = $reschedule->handle($appointment, Carbon::parse($request->validated('starts_at')));
+        $rescheduled = $reschedule->handle(
+            $request->user(),
+            $appointment,
+            Carbon::parse($request->validated('starts_at')),
+        );
 
         return AppointmentResource::make($rescheduled->load(['service', 'user']));
     }
 
-    public function cancel(Appointment $appointment, CancelAppointment $cancel): AppointmentResource
+    public function cancel(Request $request, Appointment $appointment, CancelAppointment $cancel): AppointmentResource
     {
         $this->authorize('cancel', $appointment);
 
-        return AppointmentResource::make($cancel->handle($appointment)->load(['service', 'user']));
+        return AppointmentResource::make(
+            $cancel->handle($request->user(), $appointment)->load(['service', 'user']),
+        );
     }
 }

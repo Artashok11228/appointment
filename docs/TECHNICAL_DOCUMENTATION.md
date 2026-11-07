@@ -1,7 +1,19 @@
 # مستند فنی — Appointment Booking API
 
 > منبع حقیقت: کد موجود در ریپازیتوری. هیچ قابلیت حدس‌زده نشده است.
-> تاریخ تحلیل بر اساس وضعیت فعلی پروژه.
+> آخرین به‌روزرسانی: ۲۰۲۶-۱۱-۰۷ — هم‌تراز با قفل لغو/جابجایی، `restrictOnDelete`، ریست `reminded_at`، و تست‌های QA جدید.
+
+### Changelog این نسخهٔ مستند
+| تغییر در کد | اثر روی رفتار |
+|---|---|
+| `booking.modification_lock_minutes` + `BOOKING_MODIFICATION_LOCK_MINUTES` | مشتری از N دقیقه قبل از `starts_at` نمی‌تواند cancel/reschedule کند (پیش‌فرض ۱۲۰)؛ ادمین مستثنی است |
+| `Appointment::isLockedForCustomerModification()` | تشخیص پنجرهٔ قفل |
+| `CancelAppointment` / `RescheduleAppointment` پارامتر `User $actor` | قفل داخل Action با `lockForUpdate` + چک نقش |
+| `RescheduleAppointment` ست کردن `reminded_at = null` | یادآوری برای زمان جدید دوباره قابل ارسال است |
+| FKهای `appointments` → `restrictOnDelete` | حذف user/service دارای نوبت در سطح DB رد می‌شود |
+| `ServiceController@destroy` | اگر **هر** appointmentی وجود داشته باشد → `409` |
+| تست‌های جدید Feature | modification lock، adversarial booking، temporal integrity، reminder reliability |
+| تصمیم‌های باز محصول | `docs/PRODUCT_HARD_DECISIONS.md` |
 
 ---
 
@@ -13,14 +25,15 @@
 ### کاربران هدف
 | نقش | مقدار `role` | توانایی‌ها |
 |---|---|---|
-| Customer | `customer` | ثبت‌نام، مشاهده سرویس‌ها، دیدن اسلات آزاد، رزرو/جابجایی/لغو نوبت‌های خود |
-| Admin | `admin` | همهٔ کارهای مشتری + CRUD سرویس‌ها، دیدن همهٔ نوبت‌ها، آمار ادمین |
+| Customer | `customer` | ثبت‌نام، مشاهده سرویس‌ها، دیدن اسلات آزاد، رزرو/جابجایی/لغو نوبت‌های خود (تا قبل از پنجرهٔ قفل نزدیک شروع) |
+| Admin | `admin` | همهٔ کارهای مشتری + CRUD سرویس‌ها، دیدن همهٔ نوبت‌ها، آمار ادمین؛ **مستثنی از قفل زمانی** لغو/جابجایی |
 
 ### قابلیت‌های اصلی (بر اساس کد)
 - ثبت‌نام / ورود / خروج / پروفایل (`AuthController`)
-- مدیریت سرویس‌ها (`ServiceController`)
+- مدیریت سرویس‌ها (`ServiceController`)؛ حذف فقط وقتی هیچ تاریخچهٔ نوبتی نباشد
 - محاسبه اسلات‌های آزاد (`AvailabilityController` + `ListAvailableSlots`)
 - رزرو، لیست، جزئیات، جابجایی، لغو نوبت (`AppointmentController` + Actions)
+- قفل مشتری برای cancel/reschedule نزدیک به شروع (`modification_lock_minutes`)
 - آمار ادمین (`AdminStatsController` + `BuildAdminStats`)
 - ایمیل تأیید / لغو / جابجایی / یادآوری ۲۴ ساعته (Notifications صف‌شده)
 - تکمیل خودکار نوبت‌های گذشته (`appointments:complete-past`)
@@ -77,15 +90,17 @@ appointment/
 │   ├── migrations/
 │   └── seeders/DatabaseSeeder.php
 ├── docs/
-│   ├── PROJECT_OVERVIEW.md                # مرور خلاصه قبلی
-│   └── TECHNICAL_DOCUMENTATION.md         # همین فایل
+│   ├── PROJECT_OVERVIEW.md                # مرور خلاصه
+│   ├── TECHNICAL_DOCUMENTATION.md         # همین فایل
+│   ├── PRODUCT_HARD_DECISIONS.md          # تصمیم‌های محصول باز/بسته
+│   └── QA_FIX_HANDOFF.md                  # یافته‌های QA و پیشنهاد فیکس
 ├── floorplan/                             # ابزار visualization کد؛ بخشی از اپ نیست
 ├── public/index.php                       # front controller
 ├── routes/
 │   ├── api.php                            # همهٔ endpointها
 │   └── console.php                        # Schedule ساعتی
 ├── tests/
-│   ├── Feature/                           # تست‌های HTTP / جریان‌ها
+│   ├── Feature/                           # تست‌های HTTP / جریان‌ها (+ QA جدید)
 │   └── Unit/EnumTest.php
 ├── artisan
 ├── composer.json
@@ -213,8 +228,9 @@ Migration پایه: `database/migrations/2026_10_26_201538_create_services_table
 Index: `(service_id, starts_at, ends_at)` برای جستجوی overlap.
 
 Migrations:
-- `database/migrations/2026_10_26_201539_create_appointments_table.php`
+- `database/migrations/2026_10_26_201539_create_appointments_table.php` (در ابتدا cascade؛ بعداً عوض شد)
 - `database/migrations/2026_10_30_120000_add_reminded_at_to_appointments_table.php`
+- `database/migrations/2026_11_07_073817_change_appointment_foreign_keys_to_restrict_on_delete.php`
 
 ### جداول فریم‌ورک
 | جدول | نقش در این پروژه |
@@ -266,13 +282,14 @@ erDiagram
   }
 ```
 
-### Scopes مهم (`App\Models\Appointment`)
-| Scope | کار |
+### Scopes / متدهای مهم (`App\Models\Appointment`)
+| عضو | کار |
 |---|---|
 | `overlapping($serviceId, $start, $end, $exceptId?)` | نوبت‌های غیر `cancelled` همان سرویس که با بازه تداخل دارند |
 | `visibleTo($user)` | ادمین: همه؛ مشتری: فقط خودش |
 | `filtered($filters)` | فیلترهای `status`, `service_id`, `from`, `to` |
-| `futureConfirmed()` | نوبت‌های confirmed با `starts_at > now()` |
+| `futureConfirmed()` | نوبت‌های confirmed با `starts_at > now()` (هنوز روی مدل هست؛ حذف سرویس دیگر از آن استفاده نمی‌کند) |
+| `isLockedForCustomerModification()` | اگر `modification_lock_minutes > 0` و `starts_at` هنوز آینده باشد و `now` داخل پنجرهٔ `[starts_at - N, starts_at)` باشد → `true` |
 
 ### Seeder (`Database\Seeders\DatabaseSeeder`)
 | رکورد | جزئیات |
@@ -350,8 +367,10 @@ Middleware سراسری API: `throttle:api` (۶۰ درخواست/دقیقه per 
 | GET | `/api/appointments` | sanctum + `viewAny` | `index` | `IndexAppointmentRequest`: optional `status` (enum), `service_id` exists, `from`/`to` `Y-m-d`، `to` ≥ `from` | paginated `AppointmentResource` (۱۵ per page از `config('booking.appointments_per_page')`) |
 | POST | `/api/appointments` | sanctum + `create` | `store` → `CreateAppointment` | `service_id` exists؛ `starts_at` `Y-m-d H:i:s` یا `Y-m-d H:i` (بدون offset) | `201` |
 | GET | `/api/appointments/{appointment}` | owner یا admin (`view`) | `show` | — | `200` |
-| PATCH | `/api/appointments/{appointment}` | owner یا admin (`reschedule`) | `reschedule` → `RescheduleAppointment` | `starts_at` همان فرمت | `200`؛ غیر confirmed → `409`؛ اسلات نامعتبر → `422` |
-| POST | `/api/appointments/{appointment}/cancel` | owner یا admin (`cancel`) | `cancel` → `CancelAppointment` | — | `200`؛ غیر confirmed → `409` |
+| PATCH | `/api/appointments/{appointment}` | owner یا admin (`reschedule`) | `reschedule` → `RescheduleAppointment` | `starts_at` همان فرمت | `200`؛ غیر confirmed → `409`؛ اسلات نامعتبر → `422`؛ مشتری داخل پنجرهٔ قفل → `409` |
+| POST | `/api/appointments/{appointment}/cancel` | owner یا admin (`cancel`) | `cancel` → `CancelAppointment` | — | `200`؛ غیر confirmed → `409`؛ مشتری داخل پنجرهٔ قفل → `409` |
+
+**قفل نزدیک شروع (مشتری):** اگر تا `starts_at` کمتر از `config('booking.modification_lock_minutes')` دقیقه مانده باشد، cancel/reschedule برای مشتری `409` با پیام مربوطه می‌دهد. ادمین همیشه می‌تواند. مقدار `0` قفل را خاموش می‌کند.
 
 `AppointmentResource` (با روابط لودشده):
 
@@ -410,13 +429,17 @@ Middleware سراسری API: `throttle:api` (۶۰ درخواست/دقیقه per 
 
 ### 6.3 `RescheduleAppointment`
 **مسئولیت:** جابجایی نوبت confirmed.  
+امضا: `handle(User $actor, Appointment $appointment, CarbonInterface $startsAt)`.  
 قفل سرویس + قفل خود appointment؛ در overlap خودش را ignore می‌کند.  
 فقط `confirmed`؛ وگرنه `BookingConflict`.  
-با تغییر زمان، `reminded_at` را `null` می‌کند تا یادآوری دوباره ارسال شود.
+اگر `$actor` ادمین نباشد و `isLockedForCustomerModification()` → `BookingConflict` (نزدیک شروع).  
+با تغییر زمان، `reminded_at` را `null` می‌کند تا یادآوری برای زمان جدید دوباره قابل ارسال باشد.
 
 ### 6.4 `CancelAppointment`
 **مسئولیت:** وضعیت را به `cancelled` تغییر می‌دهد و `AppointmentCancelled` را notify می‌کند.  
-فقط از `confirmed`. داخل transaction با `lockForUpdate` روی ردیف نوبت.
+امضا: `handle(User $actor, Appointment $appointment)`.  
+فقط از `confirmed`. داخل transaction با `lockForUpdate` روی ردیف نوبت.  
+همان قفل زمانی نزدیک شروع برای مشتری (ادمین مستثنی).
 
 ### 6.5 `BuildAdminStats`
 خروجی:
@@ -500,11 +523,11 @@ Enum `App\Enums\Role`: `Admin`, `Customer`.
 | `FILESYSTEM_DISK` | local | فایل |
 | `REDIS_*` | … | در صورت استفاده از redis (پیش‌فرض پروژه database است) |
 | `AWS_*` | … | اسکلت Laravel؛ استفادهٔ دامنه مشاهده نشد |
+| `APP_TIMEZONE` | UTC | timezone اپ (`config/app.php`)؛ ساعات کاری و `starts_at` نسبت به همین تفسیر می‌شوند |
 | `VITE_APP_NAME` | ${APP_NAME} | اسکلت؛ فرانت در ریپو نیست |
 | `SANCTUM_STATEFUL_DOMAINS` | (اختیاری، در config) | SPA cookie auth؛ این API از Bearer استفاده می‌کند |
 | `SANCTUM_TOKEN_PREFIX` | (اختیاری) | پیشوند توکن |
-
-Timezone از `APP_TIMEZONE` خوانده می‌شود (`config/app.php` → `env('APP_TIMEZONE', 'UTC')`؛ در `.env.example` هم هست).
+| `BOOKING_MODIFICATION_LOCK_MINUTES` | 120 | دقیقه قبل از شروع که مشتری دیگر cancel/reschedule نکند؛ `0` = خاموش |
 
 ### `config/booking.php`
 | Key | Default | معنی |
@@ -514,6 +537,7 @@ Timezone از `APP_TIMEZONE` خوانده می‌شود (`config/app.php` → `e
 | `open_weekdays` | `[1,2,3,4,5]` | ISO-8601 (دوشنبه=1) |
 | `appointments_per_page` | `15` | صفحهٔ لیست نوبت |
 | `reminder_hours` | `24` | پنجرهٔ یادآوری |
+| `modification_lock_minutes` | `(int) env('BOOKING_MODIFICATION_LOCK_MINUTES', 120)` | قفل لغو/جابجایی مشتری نزدیک شروع |
 | `stats_days` | `30` | پنجرهٔ bookings_per_day |
 | `top_services` | `5` | تعداد برترین سرویس‌ها |
 
@@ -628,7 +652,7 @@ Health check: `GET /up`
 ### انواع تست
 | نوع | مسیر | پوشش تقریبی |
 |---|---|---|
-| Feature | `tests/Feature/*` | auth، services، availability، booking، appointment management/index، notifications، reminders، complete-past، admin stats، seeder، domain/schema، concurrency (MySQL) |
+| Feature | `tests/Feature/*` | auth، services، availability، booking، appointment management/index، notifications، reminders، complete-past، admin stats، seeder، domain/schema، concurrency (MySQL)، modification lock، adversarial، temporal integrity، reminder reliability |
 | Unit | `tests/Unit/EnumTest.php` | مقادیر enum Role و AppointmentStatus |
 
 ### اجرای تست‌ها
@@ -642,21 +666,30 @@ php artisan test
 DB_CONNECTION=mysql DB_DATABASE=appointment_booking_test php artisan test --group=mysql
 ```
 
+گروه `product-contract` (در `AppointmentTemporalIntegrityTest`): رفتار مطلوب محصول برای نوبت تمام‌شده قبل از `complete-past` را توصیف می‌کند؛ تا وقتی تصمیم محصول باز است، ممکن است با رفتار فعلی کد هم‌خوان نباشد — جزئیات در `docs/PRODUCT_HARD_DECISIONS.md`.
+
 ### محیط تست (`phpunit.xml`)
 - SQLite memory
 - `MAIL_MAILER=array`
 - `QUEUE_CONNECTION=sync` (به‌جز تست‌هایی که صراحتاً database queue را می‌سنجند)
 - `CACHE_STORE=array` / `SESSION_DRIVER=array`
 
-### نتیجه اجرای مشاهده‌شده
-روی محیط تحلیل: **91** تست، **90** پاس، **1** skip (`ConcurrentBookingTest` بدون MySQL `_test`)، حدود **301** assertion.
+### نتیجهٔ اجرای اخیر (۲۰۲۶-۱۱-۰۷)
+**121** تست: **109** پاس، **11** فیل، **1** skip (`ConcurrentBookingTest` بدون MySQL `_test`).
+
+فیلهای عمدی/باز (هنوز در کد محصول فیکس نشده‌اند؛ ثبت در `PRODUCT_HARD_DECISIONS.md`):
+- `AppointmentTemporalIntegrityTest` — انتظار `409` برای نوبت تمام‌شده قبل از `complete-past`
+- بیشترِ `ReminderReliabilityTest` — hardening صف/ارسال یادآوری
+
+یک فیل جانبی قابل فیکس تست: `NotificationTest` به‌خاطر قفل ۲ساعتهٔ جدید، reschedule نزدیک شروع را `409` می‌گیرد و باید زمان تست را بیرون از پنجره ببرد.
 
 ### Coverage
 تنظیم `<source><include>app</include></source>` در PHPUnit هست، اما گزارش coverage تولیدشده/آستانه در ریپو مشاهده نشد → **Unknown / Needs confirmation** برای درصد پوشش واقعی.
 
 فایل‌های تست Feature (نام‌های متد توصیف‌گر رفتار هستند)، از جمله:
 - `AuthTest`, `ServiceTest`, `AvailabilityTest`, `BookingTest`
-- `AppointmentManagementTest`, `AppointmentIndexTest`
+- `AppointmentManagementTest`, `AppointmentIndexTest`, `AppointmentModificationLockTest`
+- `AdversarialBookingTest`, `AppointmentTemporalIntegrityTest`, `ReminderReliabilityTest`
 - `NotificationTest`, `SendAppointmentRemindersTest`, `CompletePastAppointmentsTest`
 - `AdminStatsTest`, `SeederTest`, `DomainTest`, `ConcurrentBookingTest`
 
@@ -668,39 +701,51 @@ DB_CONNECTION=mysql DB_DATABASE=appointment_booking_test php artisan test --grou
 
 | Severity | موضوع | مسیر | پیشنهاد |
 |---|---|---|---|
-| Low | README/`docs/PROJECT_OVERVIEW.md` هنوز می‌گوید unique بودن نام سرویس فقط در validation است؛ در حالی که migration یونیک DB اضافه شده | `README.md`, `docs/PROJECT_OVERVIEW.md`, migration `2026_11_04_...` | مستند را با کد هم‌تراز کنید |
-| Low | ثبت‌نام فقط تحت throttle عمومی API است (نه limiter سخت‌گیرانه مثل login)؛ امکان ساخت حساب‌های زیاد با IPهای مختلف همچنان باز است | `routes/api.php` | در صورت نیاز `throttle` اختصاصی برای register |
+| Medium (عمداً باز) | قابلیت اطمینان صف یادآوری: retry، سرکوب بعد از cancel/reschedule، race دو worker، … | `SendAppointmentReminders`, `AppointmentReminder`, `docs/PRODUCT_HARD_DECISIONS.md` مورد ۲ | تا تصمیم محصول، کد را عوض نکن؛ تست‌ها در `ReminderReliabilityTest` رفتار مطلوب را ثبت کرده‌اند |
+| Medium (عمداً باز) | نوبت تمام‌شده / در حال اجرا هنوز با وضعیت `confirmed` قابل cancel/reschedule است تا قبل از `complete-past` | Actions + `AppointmentTemporalIntegrityTest` | منتظر تصمیم موارد ۱ و ۳ در `PRODUCT_HARD_DECISIONS.md` |
+| Low | ثبت‌نام فقط تحت throttle عمومی API است | `routes/api.php` | در صورت نیاز `throttle` اختصاصی برای register |
+| Low | README/`PROJECT_OVERVIEW` ممکن است هنوز با آخرین قوانین (قفل ۲ساعته، restrict delete) کامل هم‌تراز نباشد | `README.md`, `docs/PROJECT_OVERVIEW.md` | با این فایل sync شوند |
 | Info | هیچ frontend / API versioning / OpenAPI spec در ریپو نیست | — | برای مصرف کلاینت، OpenAPI اختیاری است |
 | Info | تست concurrency به‌طور پیش‌فرض skip می‌شود | `ConcurrentBookingTest` | در CI یک job MySQL با `--group=mysql` اضافه کنید |
-| Info | tech debt اندک و عمداً ساده نگه داشته شده (بدون Repository/DTO) — با قوانین پروژه هم‌خوان است | — | حفظ KISS |
-| Info | قفل ردیف سرویس رزروهای همان سرویس را سریال می‌کند؛ در مقیاس کوچک قابل قبول است | `CreateAppointment`, `RescheduleAppointment` | در رشد، قفل ظریف‌تر (مثلاً روی بازهٔ زمانی) در نظر بگیرید |
+| Info | قفل ردیف سرویس رزروهای همان سرویس را سریال می‌کند؛ در مقیاس کوچک قابل قبول است | `CreateAppointment`, `RescheduleAppointment` | در رشد، قفل ظریف‌تر در نظر بگیرید |
+
+فیکس‌های اخیراً اعمال‌شده (دیگر به‌عنوان بدهی باز نیستند):
+- ریست `reminded_at` هنگام reschedule
+- `lockForUpdate` + transaction در cancel
+- `restrictOnDelete` و بلاک حذف سرویس با تاریخچه
+- `APP_TIMEZONE` از env
+- قفل ۲ساعتهٔ مشتری برای cancel/reschedule
 
 نکات مثبت قابل ذکر:
 - جلوگیری از double-booking با `lockForUpdate`
 - `role` غیر fillable
 - نوتیفیکیشن‌ها `ShouldQueueAfterCommit`
-- Policy/Gate واضح
+- Policy/Gate واضح + استثنای ادمین در قفل زمانی
 - مجموعه Feature test گسترده با نام‌های خوانا
 
 ---
 
 ## 14. Open Questions
 
-مواردی که از کد به‌تنهایی قطعی نشد:
+مواردی که از کد به‌تنهایی قطعی نشد / هنوز تصمیم محصول باز است (جزئیات: `docs/PRODUCT_HARD_DECISIONS.md`):
 
-1. **محیط پروداکشن واقعی** (هاست، Docker، CI/CD، دامنه، mailer واقعی) — در ریپو تعریف نشده.
-2. **درصد coverage واقعی تست‌ها** — گزارش coverage ذخیره نشده.
-3. **تأیید ایمیل / فراموشی رمز / refresh token** — پیاده‌سازی نشده؛ آیا عمدی است؟
-4. **نقش `floorplan/`** — ابزار کمکی visualization است؛ Unknown که آیا برای delivery نگه داشته می‌شود.
-5. **نسخه دقیق PHP هدف پروداکشن** — constraint `^8.3` است؛ محیط تحلیل 8.4 بود.
-6. **آیا Sanctum stateful/SPA cookie mode استفاده خواهد شد؟** — الان جریان اصلی Bearer token است.
-7. **مقادیر قیمت واحد پول** — فیلد `price` بدون currency؛ واحد پول Unknown / Needs confirmation.
+1. **نوبت تمام‌شده قبل از `appointments:complete-past`** — آیا cancel/reschedule باید `409` شود؟ (عمداً فعلاً انجام نمی‌شود)
+2. **نوبت در حال اجرا** (`starts_at <= now < ends_at`) — همان محدودیت؟ (عمداً فعلاً انجام نمی‌شود)
+3. **قابلیت اطمینان کامل یادآوری (R1–R6)** — hardening صف/ارسال (عمداً فعلاً انجام نمی‌شود)
+4. **آیا قفل ۲ساعته بعد از شروع هم ادامه داشته باشد؟** (عمداً فعلاً انجام نمی‌شود؛ کد فعلی فقط تا قبل از شروع قفل می‌کند)
+5. **محیط پروداکشن واقعی** (هاست، Docker، CI/CD، mailer واقعی) — در ریپو تعریف نشده.
+6. **درصد coverage واقعی تست‌ها** — گزارش coverage ذخیره نشده.
+7. **تأیید ایمیل / فراموشی رمز / refresh token** — پیاده‌سازی نشده؛ آیا عمدی است؟
+8. **نقش `floorplan/`** — Unknown که آیا برای delivery نگه داشته می‌شود.
+9. **واحد پول `price`** — فیلد بدون currency.
 
-تصمیم‌های بسته‌شده:
-- **Overlap فقط per-service** — عمدی است؛ سرویس‌های مختلف می‌توانند هم‌زمان رزرو شوند.
-- **Timezone** — از `APP_TIMEZONE` قابل تنظیم است (پیش‌فرض UTC).
+تصمیم‌های بسته‌شده (در کد اعمال شده):
+- **Overlap فقط per-service** — عمدی است.
+- **Timezone** — از `APP_TIMEZONE` (پیش‌فرض UTC).
 - **`reminded_at` پس از reschedule** — ریست می‌شود.
 - **حذف سرویس/کاربر** — FKها `restrictOnDelete`؛ حذف سرویس با هر تاریخچهٔ نوبت بلاک می‌شود.
+- **قفل لغو/جابجایی نزدیک شروع** — پیش‌فرض ۱۲۰ دقیقه برای مشتری؛ ادمین مستثنی؛ `0` خاموش می‌کند.
+- **ادمین در محدودیت‌های زمانی آینده هم مستثنی است** (تصمیم محصول مورد ۴).
 
 ---
 

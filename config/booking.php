@@ -17,6 +17,12 @@ return [
 
     'reminder_hours' => 24,
 
+    /*
+    | Minutes before starts_at when customers can no longer cancel or reschedule.
+    | Admins are not affected. Set to 0 to disable the lock.
+    */
+    'modification_lock_minutes' => (int) env('BOOKING_MODIFICATION_LOCK_MINUTES', 120),
+
     'stats_days' => 30,
 
     'top_services' => 5,

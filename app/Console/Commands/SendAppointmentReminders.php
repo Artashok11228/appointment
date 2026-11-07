@@ -19,11 +19,15 @@ class SendAppointmentReminders extends Command
 
     public function handle(): int
     {
-        $due = $this->due()->get();
+        $queued = 0;
 
-        $due->each(fn (Appointment $appointment) => $this->remind($appointment));
+        $this->due()->each(function (Appointment $appointment) use (&$queued): void {
+            if ($this->remind($appointment)) {
+                $queued++;
+            }
+        });
 
-        $this->info("Queued {$due->count()} reminder(s).");
+        $this->info("Queued {$queued} reminder(s).");
 
         return self::SUCCESS;
     }
@@ -40,13 +44,34 @@ class SendAppointmentReminders extends Command
             ->orderBy('starts_at');
     }
 
-    private function remind(Appointment $appointment): void
+    private function remind(Appointment $appointment): bool
     {
-        // If queueing the mail fails, reminded_at rolls back and the next run retries.
-        DB::transaction(function () use ($appointment): void {
-            $appointment->update(['reminded_at' => now()]);
+        // Reminder mail is queued in this same transaction (not after commit),
+        // so a failed enqueue rolls reminded_at back and the next run can retry.
+        return DB::transaction(function () use ($appointment): bool {
+            $locked = Appointment::query()
+                ->whereKey($appointment->id)
+                ->lockForUpdate()
+                ->first();
 
-            $appointment->user->notify(new AppointmentReminder($appointment));
+            if ($locked === null || ! $this->stillDue($locked)) {
+                return false;
+            }
+
+            $locked->update(['reminded_at' => now()]);
+            $locked->loadMissing(['user', 'service']);
+            $locked->user->notify(new AppointmentReminder($locked));
+
+            return true;
         });
+    }
+
+    private function stillDue(Appointment $appointment): bool
+    {
+        $until = now()->addHours((int) config('booking.reminder_hours'));
+
+        return $appointment->status === AppointmentStatus::Confirmed
+            && $appointment->reminded_at === null
+            && $appointment->starts_at->between(now(), $until);
     }
 }

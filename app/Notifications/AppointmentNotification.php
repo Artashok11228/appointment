@@ -7,11 +7,9 @@ namespace App\Notifications;
 use App\Models\Appointment;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Contracts\Queue\ShouldQueueAfterCommit;
 use Illuminate\Notifications\Notification;
 
-// Queued after commit so a rolled-back booking never produces an email.
-abstract class AppointmentNotification extends Notification implements ShouldQueue, ShouldQueueAfterCommit
+abstract class AppointmentNotification extends Notification implements ShouldQueue
 {
     use Queueable;
 
