@@ -11,6 +11,7 @@ use App\Models\Service;
 use App\Models\User;
 use App\Notifications\AppointmentBooked;
 use Carbon\CarbonInterface;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
 class CreateAppointment
@@ -19,26 +20,31 @@ class CreateAppointment
 
     public function handle(User $customer, int $serviceId, CarbonInterface $startsAt): Appointment
     {
-        return DB::transaction(function () use ($customer, $serviceId, $startsAt): Appointment {
-            // Two bookings for one service have to share this row before either overlap check finishes.
-            $service = Service::query()->whereKey($serviceId)->lockForUpdate()->firstOrFail();
-            $endsAt = $startsAt->copy()->addMinutes($service->duration_minutes);
+        try {
+            return DB::transaction(function () use ($customer, $serviceId, $startsAt): Appointment {
+                // Two bookings for one service have to share this row before either overlap check finishes.
+                $service = Service::query()->whereKey($serviceId)->lockForUpdate()->firstOrFail();
+                $endsAt = $startsAt->copy()->addMinutes($service->duration_minutes);
 
-            if (! $this->slots->isFree($service, $startsAt, $endsAt)) {
-                throw new AppointmentUnavailable;
-            }
+                if (! $this->slots->isFree($service, $startsAt, $endsAt)) {
+                    throw new AppointmentUnavailable;
+                }
 
-            $appointment = Appointment::query()->create([
-                'user_id' => $customer->id,
-                'service_id' => $service->id,
-                'starts_at' => $startsAt,
-                'ends_at' => $endsAt,
-                'status' => AppointmentStatus::Confirmed,
-            ]);
+                $appointment = Appointment::query()->create([
+                    'user_id' => $customer->id,
+                    'service_id' => $service->id,
+                    'starts_at' => $startsAt,
+                    'ends_at' => $endsAt,
+                    'status' => AppointmentStatus::Confirmed,
+                ]);
 
-            $customer->notify(new AppointmentBooked($appointment->load('service')));
+                $customer->notify(new AppointmentBooked($appointment->load('service')));
 
-            return $appointment;
-        });
+                return $appointment;
+            });
+        } catch (UniqueConstraintViolationException) {
+            // Last line of defence when the service lock was skipped or raced past the overlap check.
+            throw new AppointmentUnavailable;
+        }
     }
 }

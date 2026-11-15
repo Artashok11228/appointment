@@ -12,6 +12,7 @@ use App\Models\Service;
 use App\Models\User;
 use App\Notifications\AppointmentRescheduled;
 use Carbon\CarbonInterface;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
 class RescheduleAppointment
@@ -20,32 +21,41 @@ class RescheduleAppointment
 
     public function handle(User $actor, Appointment $appointment, CarbonInterface $startsAt): Appointment
     {
-        return DB::transaction(function () use ($actor, $appointment, $startsAt): Appointment {
-            $service = Service::query()->whereKey($appointment->service_id)->lockForUpdate()->firstOrFail();
-            $locked = Appointment::query()->whereKey($appointment->id)->lockForUpdate()->firstOrFail();
+        try {
+            return DB::transaction(function () use ($actor, $appointment, $startsAt): Appointment {
+                $service = Service::query()->whereKey($appointment->service_id)->lockForUpdate()->firstOrFail();
+                $locked = Appointment::query()->whereKey($appointment->id)->lockForUpdate()->firstOrFail();
 
-            if ($locked->status !== AppointmentStatus::Confirmed) {
-                throw new BookingConflict('Only a confirmed appointment can be rescheduled.');
-            }
+                if ($locked->status !== AppointmentStatus::Confirmed) {
+                    throw new BookingConflict('Only a confirmed appointment can be rescheduled.');
+                }
 
-            if (! $actor->isAdmin() && $locked->isLockedForCustomerModification()) {
-                throw new BookingConflict('This appointment can no longer be rescheduled.');
-            }
+                // Lost 200 / double-click: same destination is a no-op (no mail, keep reminded_at).
+                if ($locked->starts_at->equalTo($startsAt)) {
+                    return $locked;
+                }
 
-            $endsAt = $startsAt->copy()->addMinutes($service->duration_minutes);
+                if (! $actor->isAdmin() && $locked->isLockedForCustomerModification()) {
+                    throw new BookingConflict('This appointment can no longer be rescheduled.');
+                }
 
-            if (! $this->slots->isFree($service, $startsAt, $endsAt, ignoring: $locked)) {
-                throw new AppointmentUnavailable;
-            }
+                $endsAt = $startsAt->copy()->addMinutes($service->duration_minutes);
 
-            $locked->update([
-                'starts_at' => $startsAt,
-                'ends_at' => $endsAt,
-                'reminded_at' => null,
-            ]);
-            $locked->user->notify(new AppointmentRescheduled($locked->load('service')));
+                if (! $this->slots->isFree($service, $startsAt, $endsAt, ignoring: $locked)) {
+                    throw new AppointmentUnavailable;
+                }
 
-            return $locked;
-        });
+                $locked->update([
+                    'starts_at' => $startsAt,
+                    'ends_at' => $endsAt,
+                    'reminded_at' => null,
+                ]);
+                $locked->user->notify(new AppointmentRescheduled($locked->load('service')));
+
+                return $locked;
+            });
+        } catch (UniqueConstraintViolationException) {
+            throw new AppointmentUnavailable;
+        }
     }
 }

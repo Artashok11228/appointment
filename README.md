@@ -6,6 +6,15 @@ Built with PHP 8.3, Laravel 13 and Sanctum tokens. MySQL in development, SQLite 
 
 For a walkthrough of the code (request flow, folder map, tables) see [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md).
 
+## API docs (Swagger)
+
+After `php artisan serve`:
+
+- UI: [http://localhost:8000/docs/api](http://localhost:8000/docs/api)
+- Spec (OpenAPI): [http://localhost:8000/docs/openapi.yaml](http://localhost:8000/docs/openapi.yaml)
+
+The same contract lives at [`docs/openapi.yaml`](docs/openapi.yaml) for frontend / codegen. In Swagger UI, use **Authorize** with a Bearer token from `POST /api/login`.
+
 ## Setup
 
 ```bash
@@ -41,6 +50,14 @@ The relevant `.env` keys. Everything else is standard Laravel.
 | `APP_TIMEZONE` | `UTC` | Opening hours and all `starts_at` values are interpreted in this timezone |
 
 Business rules live in `config/booking.php`: opening hours, open weekdays, page size, reminder window and the stats window.
+
+### Booking rules
+
+The scarce resource is the **service**, not a provider or chair. Overlap is checked per `service_id` only (`Appointment::scopeOverlapping`):
+
+- A service may have at most one non-cancelled appointment in any time range (`confirmed` or `completed`).
+- `cancelled` appointments are excluded from the overlap check, so cancelling frees that range for a new booking.
+- Different services may be booked at the same wall-clock time; they do not block each other.
 
 ### Seeded accounts
 
@@ -102,8 +119,8 @@ curl -X POST http://localhost:8000/api/appointments \
 | 401 | Missing or invalid token |
 | 403 | Logged in but not allowed (for example a customer opening someone else's appointment) |
 | 404 | Unknown id |
-| 409 | Valid request, but the current state forbids it (cancelling an already cancelled appointment, deleting a service with upcoming bookings) |
-| 422 | Validation failed, or the requested slot is not available (`errors.starts_at`) |
+| 409 | The appointment's **current status** forbids the action (for example cancelling or rescheduling something that is not `confirmed`, or deleting a service that still has upcoming confirmed bookings). Not used for a full slot. |
+| 422 | Validation failed, **or the slot is taken / off-grid** (`errors.starts_at`). This is the response for double-booking conflicts. |
 | 429 | Rate limit hit |
 
 ### Appointment statuses
@@ -119,12 +136,21 @@ php artisan test
 ./vendor/bin/pint
 ```
 
-The default suite runs on SQLite in memory. One test, `ConcurrentBookingTest`, needs real MySQL row locks: it starts two PHP processes that book the same slot and expects exactly one to win. It is skipped on other drivers, and it also refuses to run unless `DB_DATABASE` ends in `_test`, because it runs `migrate:fresh`.
+The default suite runs on SQLite in memory. `ConcurrentBookingTest` (`--group=mysql`) needs real MySQL/InnoDB row locks. It is skipped on other drivers, and it refuses to run unless `DB_DATABASE` ends in `_test`, because it runs `migrate:fresh`.
 
 ```bash
 DB_CONNECTION=mysql DB_DATABASE=appointment_booking_test php artisan test --group=mysql
 ```
 
+Expected result: three passing tests. Exactly one booking wins for a contended slot; losers exit as `AppointmentUnavailable` (HTTP 422 via the API), not 500 or deadlock. One of the tests holds the service row lock on purpose so a second process must wait, then lose cleanly — that fails if `lockForUpdate()` on the service is removed.
+
 ## How double booking is prevented
 
-`CreateAppointment` and `RescheduleAppointment` run inside a transaction and first lock the service row with `lockForUpdate()`. Two requests for the same service therefore run one after the other, so the second one sees the first one's appointment when it checks for overlaps. See `app/Actions/ListAvailableSlots::isFree()`.
+Without coordination, two requests can both pass the overlap check before either insert commits, so both would try to take the same slot.
+
+Two layers close that gap:
+
+1. **Service row lock** — `CreateAppointment` and `RescheduleAppointment` run in a transaction and take `lockForUpdate()` on the service row first. A second request for the same service waits, then sees the first booking in `ListAvailableSlots::isFree()` (cancelled rows excluded) and gets a clean **422**. The lock also avoids the InnoDB deadlock you can get when two inserts race without serialising on the service.
+2. **Active-slot unique index** — a generated `active_starts_at` column is `NULL` when `status = cancelled`, otherwise `starts_at`, with `UNIQUE(service_id, active_starts_at)`. That is the last line of defence if the app lock is skipped or a write bypasses the Action. A unique violation is caught and turned into the same `AppointmentUnavailable` **422**. After cancel, `active_starts_at` is NULL, so the same `starts_at` can be booked again.
+
+See the [Booking rules](#booking-rules) above for what counts as a conflict.

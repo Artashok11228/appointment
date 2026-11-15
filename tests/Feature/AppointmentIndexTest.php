@@ -34,8 +34,8 @@ class AppointmentIndexTest extends TestCase
             'ends_at' => '2026-11-04 10:00:00',
         ]);
         Appointment::factory()->for($other)->for($haircut)->create([
-            'starts_at' => '2026-11-03 15:00:00',
-            'ends_at' => '2026-11-03 16:00:00',
+            'starts_at' => '2026-11-03 16:00:00',
+            'ends_at' => '2026-11-03 17:00:00',
         ]);
 
         $this->actingAs($customer, 'sanctum')

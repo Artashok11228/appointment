@@ -1,0 +1,1186 @@
+openapi: 3.0.3
+info:
+  title: Appointment Booking API
+  version: 1.0.0
+  description: |
+    Contract for frontend and codegen. Built from the live Laravel routes, FormRequests,
+    API Resources, Policies, and feature tests — not from aspirational docs.
+
+    ## Base URL
+    All paths are under `/api`. Local default: `http://localhost:8000/api`.
+
+    ## Auth
+    - `POST /register` and `POST /login` are public.
+    - Everything else needs `Authorization: Bearer <token>` (Laravel Sanctum personal access token).
+    - Token lifetime: **7 days** (`sanctum.expiration` = 10080 minutes).
+    - `POST /logout` revokes only the current token.
+    - Always send `Accept: application/json`. For bodies: `Content-Type: application/json`.
+
+    ## Roles
+    | Role | Notes |
+    |---|---|
+    | `customer` | Default on register. Books/cancels/reschedules own appointments. |
+    | `admin` | Manages services, sees all appointments, admin stats. Bypasses customer modification lock. |
+
+    `role` is **never** accepted from the client on register/login/update. Seeded accounts:
+    - `admin@example.com` / `password`
+    - `customer@example.com` / `password`
+
+    ## Time & booking rules (critical for UI)
+    - App timezone: **UTC** (`APP_TIMEZONE`). Opening hours and request `starts_at` are interpreted in this timezone.
+    - Open: **Mon–Fri 09:00–17:00** (`config/booking.php`). Slots are on a grid of `service.duration_minutes`.
+    - Availability returns ISO-8601 instants (`2026-11-02T09:00:00+00:00`).
+    - When booking/rescheduling, send **naive** datetimes only — no offset:
+      - accepted: `Y-m-d H:i:s` or `Y-m-d H:i`
+      - rejected: `2026-11-02T09:00:00+00:00`, `Z`, etc. → `422` on `starts_at`
+    - Prefer: call availability → user picks a slot → strip to `YYYY-MM-DD HH:mm:ss` for the book/reschedule body.
+    - Slot must be in the future, inside hours, on the grid, and free (no overlap with non-cancelled appointments for that service).
+    - Customer cancel/reschedule blocked within **120 minutes** before `starts_at` (`BOOKING_MODIFICATION_LOCK_MINUTES`). Admins are not locked.
+    - Only `confirmed` appointments can be cancelled or rescheduled. `completed` is set by a scheduled command after `ends_at`.
+
+    ## Rate limits
+    - API (authenticated + most routes): **60 req/min** per user id (or IP if guest).
+    - Login: **5 req/min** per `email|ip`.
+
+    ## HTTP status map
+    | Status | Meaning |
+    |---|---|
+    | 200 / 201 / 204 | Success |
+    | 401 | Missing/invalid/expired/revoked token |
+    | 403 | Authenticated but not allowed |
+    | 404 | Unknown id |
+    | 409 | Illegal **state** (`message` only). Not used for a full slot. |
+    | 422 | Validation failed, **or slot taken/off-grid** (`message` + `errors`, often `errors.starts_at`) |
+    | 429 | Rate limited |
+
+  contact:
+    name: Backend team
+
+servers:
+  - url: http://localhost:8000/api
+    description: Local `php artisan serve`
+  - url: '{baseUrl}/api'
+    description: Configurable base (set scheme+host without trailing slash)
+    variables:
+      baseUrl:
+        default: http://localhost:8000
+
+tags:
+  - name: Auth
+    description: Register, login, current user, logout.
+  - name: Services
+    description: Service catalog. Mutations are admin-only.
+  - name: Availability
+    description: Free slots for a service on a given calendar day.
+  - name: Appointments
+    description: Book, list, show, reschedule, cancel.
+  - name: Admin
+    description: Admin-only dashboards/stats.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Register a customer account
+      description: |
+        Creates a user with role `customer` always. Extra fields like `role` are ignored.
+        Password must be confirmed and at least 8 characters (`Password::defaults()`).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              ok:
+                value:
+                  name: Ada Lovelace
+                  email: ada@example.com
+                  password: password
+                  password_confirmation: password
+      responses:
+        '201':
+          description: Account created; token issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+              examples:
+                created:
+                  value:
+                    data:
+                      id: 3
+                      name: Ada Lovelace
+                      email: ada@example.com
+                      role: customer
+                    token: '1|plainTextTokenHere'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Log in and receive a token
+      description: |
+        Failed credentials return Laravel validation style on `email` (not a generic 401).
+        Throttled at 5/min per email+IP.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/AcceptJson'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              customer:
+                value:
+                  email: customer@example.com
+                  password: password
+      responses:
+        '200':
+          description: Authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+        '422':
+          description: Missing fields or wrong credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorBody'
+              examples:
+                badCredentials:
+                  value:
+                    message: The provided credentials are incorrect.
+                    errors:
+                      email:
+                        - The provided credentials are incorrect.
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke the current access token
+      responses:
+        '204':
+          description: Token revoked. Empty body.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /me:
+    get:
+      tags: [Auth]
+      operationId: me
+      summary: Current authenticated user
+      responses:
+        '200':
+          description: Current user payload.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /services:
+    get:
+      tags: [Services]
+      operationId: listServices
+      summary: List all services
+      description: Ordered by `name` ascending. Available to any authenticated role.
+      responses:
+        '200':
+          description: Full list (not paginated).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Service'
+              examples:
+                sample:
+                  value:
+                    data:
+                      - id: 1
+                        name: Beard trim
+                        duration_minutes: 30
+                        price: '30.00'
+                      - id: 2
+                        name: Haircut
+                        duration_minutes: 60
+                        price: '80.00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Services]
+      operationId: createService
+      summary: Create a service (admin)
+      description: Requires admin. Name must be unique.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceWrite'
+            examples:
+              haircut:
+                value:
+                  name: Haircut
+                  duration_minutes: 60
+                  price: 80
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Service'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /services/{service}:
+    parameters:
+      - $ref: '#/components/parameters/ServiceId'
+    get:
+      tags: [Services]
+      operationId: getService
+      summary: Get one service
+      responses:
+        '200':
+          description: Service found.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Service'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Services]
+      operationId: replaceService
+      summary: Update a service — full body (admin)
+      description: Same validation as PATCH. All write fields are required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceWrite'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Service'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    patch:
+      tags: [Services]
+      operationId: updateService
+      summary: Update a service (admin)
+      description: |
+        Despite being PATCH, validation currently requires all fields (`name`,
+        `duration_minutes`, `price`) — treat like a full replace.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceWrite'
+            examples:
+              update:
+                value:
+                  name: Haircut
+                  duration_minutes: 60
+                  price: 95.5
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Service'
+              examples:
+                updated:
+                  value:
+                    data:
+                      id: 2
+                      name: Haircut
+                      duration_minutes: 60
+                      price: '95.50'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [Services]
+      operationId: deleteService
+      summary: Delete a service (admin)
+      description: |
+        Fails with **409** if the service has **any** appointment history
+        (not only upcoming). Empty body on success.
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Service still referenced by appointments.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageOnly'
+              examples:
+                hasHistory:
+                  value:
+                    message: This service still has appointment history and cannot be deleted.
+
+  /services/{service}/availability:
+    get:
+      tags: [Availability]
+      operationId: getServiceAvailability
+      summary: Free slots for a calendar day
+      description: |
+        Query param `date` is required (`Y-m-d`). Returns only free slots for that day
+        (weekends / closed days → empty `data`). Past slots on "today" are omitted.
+        Use returned `starts_at` values (convert to naive app-timezone string) when booking.
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+        - name: date
+          in: query
+          required: true
+          description: Calendar day in app timezone.
+          schema:
+            type: string
+            format: date
+            example: '2026-11-10'
+      responses:
+        '200':
+          description: Free slots (may be empty array).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TimeSlot'
+              examples:
+                weekday:
+                  value:
+                    data:
+                      - starts_at: '2026-11-02T09:00:00+00:00'
+                        ends_at: '2026-11-02T10:00:00+00:00'
+                      - starts_at: '2026-11-02T10:00:00+00:00'
+                        ends_at: '2026-11-02T11:00:00+00:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /appointments:
+    get:
+      tags: [Appointments]
+      operationId: listAppointments
+      summary: List appointments (paginated)
+      description: |
+        Customers see only their own. Admins see all.
+        Ordered by `starts_at` ascending. Page size fixed at **15** (`booking.appointments_per_page`).
+        Includes nested `service` and `user`.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AppointmentStatus'
+        - name: service_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+        - name: from
+          in: query
+          required: false
+          description: Inclusive start of `starts_at` filter (`Y-m-d`, start of day).
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          description: Inclusive end of `starts_at` filter (`Y-m-d`, end of day). If `from` is set, must be `>= from`.
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+      responses:
+        '200':
+          description: Paginated collection (Laravel default meta/links).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppointmentPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    post:
+      tags: [Appointments]
+      operationId: createAppointment
+      summary: Book a slot
+      description: |
+        Any authenticated user can book for **themselves** (`user_id` is taken from the token).
+        Unavailable/invalid slots → **422** with `errors.starts_at` (message often
+        `That time is no longer available.`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoreAppointmentRequest'
+            examples:
+              book:
+                value:
+                  service_id: 1
+                  starts_at: '2026-11-10 09:45:00'
+      responses:
+        '201':
+          description: Booked as `confirmed`. Nested `service` + `user` included.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Appointment'
+              examples:
+                booked:
+                  value:
+                    data:
+                      id: 10
+                      user_id: 2
+                      service_id: 1
+                      starts_at: '2026-11-10T09:45:00+00:00'
+                      ends_at: '2026-11-10T10:45:00+00:00'
+                      status: confirmed
+                      service:
+                        id: 1
+                        name: Haircut
+                        duration_minutes: 60
+                        price: '80.00'
+                      user:
+                        id: 2
+                        name: Customer
+                        email: customer@example.com
+                        role: customer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Validation failure or slot unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorBody'
+              examples:
+                unavailable:
+                  value:
+                    message: That time is no longer available.
+                    errors:
+                      starts_at:
+                        - That time is no longer available.
+
+  /appointments/{appointment}:
+    parameters:
+      - $ref: '#/components/parameters/AppointmentId'
+    get:
+      tags: [Appointments]
+      operationId: getAppointment
+      summary: Get one appointment
+      description: Owner or admin.
+      responses:
+        '200':
+          description: Appointment with nested relations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Appointment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Appointments]
+      operationId: rescheduleAppointment
+      summary: Reschedule to a new starts_at
+      description: |
+        Owner or admin. Service cannot be changed — only `starts_at`.
+        Same slot rules as booking. Clears `reminded_at` so a new reminder can fire.
+        Conflict cases → **409** with `message` only (not Laravel `errors`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RescheduleAppointmentRequest'
+            examples:
+              move:
+                value:
+                  starts_at: '2026-11-10 11:00:00'
+      responses:
+        '200':
+          description: Rescheduled.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Appointment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Not confirmed, or customer lock window.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageOnly'
+              examples:
+                notConfirmed:
+                  value:
+                    message: Only a confirmed appointment can be rescheduled.
+                locked:
+                  value:
+                    message: This appointment can no longer be rescheduled.
+        '422':
+          description: Bad format or slot unavailable (same body shape as book).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorBody'
+              examples:
+                unavailable:
+                  value:
+                    message: That time is no longer available.
+                    errors:
+                      starts_at:
+                        - That time is no longer available.
+
+  /appointments/{appointment}/cancel:
+    post:
+      tags: [Appointments]
+      operationId: cancelAppointment
+      summary: Cancel an appointment
+      description: |
+        Owner or admin. No request body. Sets status to `cancelled`.
+        Conflict cases → **409**.
+      parameters:
+        - $ref: '#/components/parameters/AppointmentId'
+      responses:
+        '200':
+          description: Cancelled; returns updated appointment.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Appointment'
+              examples:
+                cancelled:
+                  value:
+                    data:
+                      id: 10
+                      user_id: 2
+                      service_id: 1
+                      starts_at: '2026-11-10T09:45:00+00:00'
+                      ends_at: '2026-11-10T10:45:00+00:00'
+                      status: cancelled
+                      service:
+                        id: 1
+                        name: Haircut
+                        duration_minutes: 60
+                        price: '80.00'
+                      user:
+                        id: 2
+                        name: Customer
+                        email: customer@example.com
+                        role: customer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Not confirmed, or customer lock window.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageOnly'
+              examples:
+                notConfirmed:
+                  value:
+                    message: Only a confirmed appointment can be cancelled.
+                locked:
+                  value:
+                    message: This appointment can no longer be cancelled.
+
+  /admin/stats:
+    get:
+      tags: [Admin]
+      operationId: getAdminStats
+      summary: Dashboard statistics (admin)
+      description: |
+        Admin only. Window for `bookings_per_day` is last **30** days including today.
+        `top_services` limited to **5**. `cancellation_rate` is cancelled/total rounded to 4 decimals (0 if empty).
+      responses:
+        '200':
+          description: Stats payload.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AdminStats'
+              examples:
+                sample:
+                  value:
+                    data:
+                      by_status:
+                        confirmed: 3
+                        cancelled: 1
+                        completed: 1
+                      bookings_per_day:
+                        - date: '2026-10-10'
+                          total: 0
+                        - date: '2026-11-08'
+                          total: 2
+                      top_services:
+                        - service_id: 1
+                          name: Haircut
+                          total: 4
+                        - service_id: 2
+                          name: Shave
+                          total: 1
+                      cancellation_rate: 0.2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum personal access token
+      description: |
+        Value from `token` field of register/login response.
+        Header: `Authorization: Bearer {token}`
+
+  parameters:
+    AcceptJson:
+      name: Accept
+      in: header
+      required: false
+      schema:
+        type: string
+        default: application/json
+    ServiceId:
+      name: service
+      in: path
+      required: true
+      description: Service primary key.
+      schema:
+        type: integer
+        minimum: 1
+    AppointmentId:
+      name: appointment
+      in: path
+      required: true
+      description: Appointment primary key.
+      schema:
+        type: integer
+        minimum: 1
+
+  responses:
+    Unauthorized:
+      description: Missing, invalid, expired, or revoked token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MessageOnly'
+          examples:
+            default:
+              value:
+                message: Unauthenticated.
+    Forbidden:
+      description: Authenticated but not permitted for this resource/action.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MessageOnly'
+          examples:
+            default:
+              value:
+                message: This action is unauthorized.
+    NotFound:
+      description: Route model binding could not find the resource.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MessageOnly'
+    ValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorBody'
+    TooManyRequests:
+      description: Rate limit exceeded.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MessageOnly'
+
+  schemas:
+    Role:
+      type: string
+      enum: [admin, customer]
+
+    AppointmentStatus:
+      type: string
+      enum: [confirmed, cancelled, completed]
+      description: |
+        `confirmed` on create.
+        `cancelled` via cancel endpoint.
+        `completed` by hourly scheduler after `ends_at` — not set by clients.
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, name, email, role]
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Ada Lovelace
+        email:
+          type: string
+          format: email
+          example: ada@example.com
+        role:
+          $ref: '#/components/schemas/Role'
+
+    Service:
+      type: object
+      additionalProperties: false
+      required: [id, name, duration_minutes, price]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          maxLength: 255
+        duration_minutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          description: Slot length and grid step for availability.
+        price:
+          type: string
+          description: Decimal string with 2 places (Eloquent `decimal:2` cast), e.g. `"80.00"`.
+          pattern: '^\d+(\.\d{1,2})?$'
+          example: '80.00'
+
+    ServiceWrite:
+      type: object
+      additionalProperties: false
+      required: [name, duration_minutes, price]
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        duration_minutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+        price:
+          type: number
+          minimum: 0
+          maximum: 99999999.99
+          description: Numeric in request; response returns 2-decimal string.
+          example: 80
+
+    Appointment:
+      type: object
+      additionalProperties: false
+      required: [id, user_id, service_id, starts_at, ends_at, status]
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: integer
+        service_id:
+          type: integer
+        starts_at:
+          type: string
+          format: date-time
+          description: ISO-8601 with offset (UTC in default config).
+          example: '2026-11-10T09:45:00+00:00'
+        ends_at:
+          type: string
+          format: date-time
+          description: starts_at plus service.duration_minutes.
+          example: '2026-11-10T10:45:00+00:00'
+        status:
+          $ref: '#/components/schemas/AppointmentStatus'
+        service:
+          allOf:
+            - $ref: '#/components/schemas/Service'
+          description: Present when relation is loaded (list/show/store/reschedule/cancel).
+        user:
+          allOf:
+            - $ref: '#/components/schemas/User'
+          description: Present when relation is loaded.
+
+    TimeSlot:
+      type: object
+      additionalProperties: false
+      required: [starts_at, ends_at]
+      properties:
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+
+    NaiveStartsAt:
+      type: string
+      description: |
+        App-timezone local datetime without timezone offset.
+        Formats Y-m-d H:i:s or Y-m-d H:i.
+      example: '2026-11-10 09:45:00'
+
+    RegisterRequest:
+      type: object
+      additionalProperties: true
+      required: [name, email, password, password_confirmation]
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          minLength: 8
+          writeOnly: true
+        password_confirmation:
+          type: string
+          writeOnly: true
+          description: Must match `password`.
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          writeOnly: true
+
+    StoreAppointmentRequest:
+      type: object
+      additionalProperties: false
+      required: [service_id, starts_at]
+      properties:
+        service_id:
+          type: integer
+          minimum: 1
+        starts_at:
+          $ref: '#/components/schemas/NaiveStartsAt'
+
+    RescheduleAppointmentRequest:
+      type: object
+      additionalProperties: false
+      required: [starts_at]
+      properties:
+        starts_at:
+          $ref: '#/components/schemas/NaiveStartsAt'
+
+    AuthTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [data, token]
+      properties:
+        data:
+          $ref: '#/components/schemas/User'
+        token:
+          type: string
+          description: Sanctum plain-text token. Store securely; send as Bearer.
+
+    MessageOnly:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+
+    ValidationErrorBody:
+      type: object
+      required: [message, errors]
+      properties:
+        message:
+          type: string
+          description: Human summary (often first error or exception message).
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          description: Map of field → list of error strings.
+          example:
+            starts_at:
+              - That time is no longer available.
+
+    PaginationLinks:
+      type: object
+      properties:
+        first:
+          type: string
+          format: uri
+          nullable: true
+        last:
+          type: string
+          format: uri
+          nullable: true
+        prev:
+          type: string
+          format: uri
+          nullable: true
+        next:
+          type: string
+          format: uri
+          nullable: true
+
+    PaginationMeta:
+      type: object
+      required: [current_page, per_page, total]
+      properties:
+        current_page:
+          type: integer
+          example: 1
+        from:
+          type: integer
+          nullable: true
+        last_page:
+          type: integer
+        links:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+                nullable: true
+              label:
+                type: string
+              page:
+                type: integer
+                nullable: true
+              active:
+                type: boolean
+        path:
+          type: string
+          format: uri
+        per_page:
+          type: integer
+          example: 15
+        to:
+          type: integer
+          nullable: true
+        total:
+          type: integer
+
+    AppointmentPage:
+      type: object
+      required: [data, links, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Appointment'
+        links:
+          $ref: '#/components/schemas/PaginationLinks'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    AdminStats:
+      type: object
+      additionalProperties: false
+      required: [by_status, bookings_per_day, top_services, cancellation_rate]
+      properties:
+        by_status:
+          type: object
+          additionalProperties: false
+          required: [confirmed, cancelled, completed]
+          properties:
+            confirmed:
+              type: integer
+            cancelled:
+              type: integer
+            completed:
+              type: integer
+        bookings_per_day:
+          type: array
+          description: One entry per day for the last 30 days (including today), ascending by date.
+          items:
+            type: object
+            additionalProperties: false
+            required: [date, total]
+            properties:
+              date:
+                type: string
+                format: date
+              total:
+                type: integer
+                description: Count of appointments created that calendar day.
+        top_services:
+          type: array
+          maxItems: 5
+          items:
+            type: object
+            additionalProperties: false
+            required: [service_id, name, total]
+            properties:
+              service_id:
+                type: integer
+              name:
+                type: string
+              total:
+                type: integer
+        cancellation_rate:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: cancelled / total, 4 decimal places. `0` when no appointments.
+          example: 0.2
+
+x-frontend-cookbook:
+  suggestedFlows:
+    customerBooking:
+      - POST /login
+      - GET /services
+      - GET /services/{id}/availability?date=YYYY-MM-DD
+      - Convert chosen slot starts_at → naive `YYYY-MM-DD HH:mm:ss`
+      - POST /appointments
+      - GET /appointments (optional filters)
+      - PATCH /appointments/{id} or POST /appointments/{id}/cancel
+    adminCatalog:
+      - POST /login (admin)
+      - CRUD /services
+      - GET /appointments (all users)
+      - GET /admin/stats
+  clientHelpers:
+    isoToNaiveUtc: |
+      // Example: "2026-11-10T09:45:00+00:00" → "2026-11-10 09:45:00"
+      // Keep wall-clock in APP_TIMEZONE (UTC by default); do not convert to browser local
+      // if you want the value the API expects.
+    storeToken: Persist `token` from login/register; attach as Authorization Bearer on every call.
+    handle409: Show `message` toast; refresh appointment status. Do not treat as a full slot.
+    handle422: Bind `errors` keys to form fields. On `errors.starts_at` after book/reschedule, show the message and refresh `GET /services/{id}/availability`.
+    handle401: Clear token and redirect to login.

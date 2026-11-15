@@ -100,7 +100,11 @@ class ClientRetryAndConfusionTest extends TestCase
             ->patchJson("/api/appointments/{$appointment->id}", $payload)
             ->assertOk();
 
-        // Lost 200; client retries the identical move.
+        Notification::assertSentToTimes($customer, AppointmentRescheduled::class, 1);
+
+        $appointment->refresh()->forceFill(['reminded_at' => '2026-11-02 07:00:00'])->save();
+
+        // Lost 200; client retries the identical move — no second mail, reminded_at stays.
         $this->actingAs($customer, 'sanctum')
             ->patchJson("/api/appointments/{$appointment->id}", $payload)
             ->assertOk()
@@ -112,8 +116,9 @@ class ClientRetryAndConfusionTest extends TestCase
             'starts_at' => '2026-11-02 14:00:00',
             'ends_at' => '2026-11-02 15:00:00',
             'status' => AppointmentStatus::Confirmed->value,
+            'reminded_at' => '2026-11-02 07:00:00',
         ]);
-        Notification::assertSentToTimes($customer, AppointmentRescheduled::class, 2);
+        Notification::assertSentToTimes($customer, AppointmentRescheduled::class, 1);
     }
 
     public function test_a_stale_reschedule_after_cancel_returns_409_without_mail(): void
