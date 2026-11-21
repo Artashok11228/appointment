@@ -4,7 +4,7 @@
 
 A JSON API for booking appointments at a small business (the seed data is a barber shop). Customers register, look up free time slots, and book, reschedule or cancel appointments. Admins manage the service list, see every appointment, and get basic statistics. Confirmation, cancellation, reschedule and 24-hour reminder emails are sent through the queue.
 
-Built with PHP 8.3, Laravel 13 and Sanctum tokens. MySQL in development, SQLite in memory for tests.
+Built with PHP 8.4, Laravel 13 and Sanctum tokens. MySQL in development, SQLite in memory for tests.
 
 For a walkthrough of the code (request flow, folder map, tables) see [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md).
 
