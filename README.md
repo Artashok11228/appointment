@@ -1,5 +1,7 @@
 # Appointment Booking API
 
+[![CI](https://github.com/Artashok11228/appointment/actions/workflows/ci.yml/badge.svg)](https://github.com/Artashok11228/appointment/actions/workflows/ci.yml)
+
 A JSON API for booking appointments at a small business (the seed data is a barber shop). Customers register, look up free time slots, and book, reschedule or cancel appointments. Admins manage the service list, see every appointment, and get basic statistics. Confirmation, cancellation, reschedule and 24-hour reminder emails are sent through the queue.
 
 Built with PHP 8.3, Laravel 13 and Sanctum tokens. MySQL in development, SQLite in memory for tests.
