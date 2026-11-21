@@ -6304,9 +6304,14 @@
         {
             "name": "composer/semver",
             "version": "3.6.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/composer/semver.git",
+                "reference": "d92543b7ede9c4ec6b59853cefb061e39866d2cf"
+            },
             "dist": {
                 "type": "zip",
-                "url": "https://registry.directam.org/repository/composer/composer/semver/3.6.0/composer-semver-3.6.0.zip",
+                "url": "https://api.github.com/repos/composer/semver/zipball/d92543b7ede9c4ec6b59853cefb061e39866d2cf",
                 "reference": "d92543b7ede9c4ec6b59853cefb061e39866d2cf",
                 "shasum": ""
             },
@@ -6626,9 +6631,14 @@
         {
             "name": "laravel/boost",
             "version": "v2.10.4",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/laravel/boost.git",
+                "reference": "9cd5e7d81300b5dee4c8b1619ec4b36f4a6367fd"
+            },
             "dist": {
                 "type": "zip",
-                "url": "https://registry.directam.org/repository/composer/laravel/boost/v2.10.4/laravel-boost-v2.10.4.zip",
+                "url": "https://api.github.com/repos/laravel/boost/zipball/9cd5e7d81300b5dee4c8b1619ec4b36f4a6367fd",
                 "reference": "9cd5e7d81300b5dee4c8b1619ec4b36f4a6367fd",
                 "shasum": ""
             },
@@ -6687,9 +6697,14 @@
         {
             "name": "laravel/mcp",
             "version": "v1.1.2",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/laravel/mcp.git",
+                "reference": "ab9238ce6c89095679651dd3d19d67641d73a436"
+            },
             "dist": {
                 "type": "zip",
-                "url": "https://registry.directam.org/repository/composer/laravel/mcp/v1.1.2/laravel-mcp-v1.1.2.zip",
+                "url": "https://api.github.com/repos/laravel/mcp/zipball/ab9238ce6c89095679651dd3d19d67641d73a436",
                 "reference": "ab9238ce6c89095679651dd3d19d67641d73a436",
                 "shasum": ""
             },
@@ -6991,9 +7006,14 @@
         {
             "name": "laravel/roster",
             "version": "v1.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/laravel/roster.git",
+                "reference": "89e518bd88ae98ff50f6082f6b517c8d8e8245fa"
+            },
             "dist": {
                 "type": "zip",
-                "url": "https://registry.directam.org/repository/composer/laravel/roster/v1.0.0/laravel-roster-v1.0.0.zip",
+                "url": "https://api.github.com/repos/laravel/roster/zipball/89e518bd88ae98ff50f6082f6b517c8d8e8245fa",
                 "reference": "89e518bd88ae98ff50f6082f6b517c8d8e8245fa",
                 "shasum": ""
             },
@@ -8835,9 +8855,14 @@
         {
             "name": "symfony/yaml",
             "version": "v8.1.11",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/yaml.git",
+                "reference": "e8266f55160f674f290a5f567cb55e11e21f921b"
+            },
             "dist": {
                 "type": "zip",
-                "url": "https://registry.directam.org/repository/composer/symfony/yaml/v8.1.11/symfony-yaml-v8.1.11.zip",
+                "url": "https://api.github.com/repos/symfony/yaml/zipball/e8266f55160f674f290a5f567cb55e11e21f921b",
                 "reference": "e8266f55160f674f290a5f567cb55e11e21f921b",
                 "shasum": ""
             },
