@@ -10,9 +10,15 @@ return new class extends Migration
     {
         Schema::table('appointments', function (Blueprint $table) {
             // NULL when cancelled so the same starts_at can be booked again after cancel.
-            $table->dateTime('active_starts_at')
-                ->nullable()
-                ->virtualAs("(CASE WHEN status = 'cancelled' THEN NULL ELSE starts_at END)");
+            // MySQL: VIRTUAL generated column. Postgres: STORED generated column.
+            $column = $table->dateTime('active_starts_at')->nullable();
+            $expression = "(CASE WHEN status = 'cancelled' THEN NULL ELSE starts_at END)";
+
+            if (Schema::getConnection()->getDriverName() === 'pgsql') {
+                $column->storedAs($expression);
+            } else {
+                $column->virtualAs($expression);
+            }
 
             $table->unique(['service_id', 'active_starts_at']);
         });
